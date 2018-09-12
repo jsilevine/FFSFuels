@@ -1,0 +1,3824 @@
+---
+title: "Data_Processing_v4"
+author: "Danny Foster"
+date: "October 18, 2017"
+output: html_document
+---
+
+**ABOUT:**
+
+This file is intended to document and perform the import, processing, and aggregation of the various datasets associated with the fire-fire-surrogate study. It was written in spring 2017 by Daniel Foster.
+
+# Implementation
+
+##Setup
+
+###Import or build tables
+
+####Constants and species-specific coefficients for fuel-load calculations
+
+See "Background Information and Metholology" for explanations of these tables.
+
+```{r}
+# Regression coefficients for litter, Duff, and litter&Duff weight (kg m-2) as a function of depth in cm for the 19 Sierra Nevada conifers listed
+# Each regression went through the origin, was based on 80 observations, and was significant at the 0.05 level
+# Source: van Wagtendonk et al. 1998, table 7
+
+vw98_spp = c("Douglas-fir","Foothill pine","Foxtail pine","Giant sequoia","Incense-cedar","Jeffrey pine","Knobcone pine","Limber pine","Lodgepole pine","Mountain hemlock","Ponderosa pine","Red fir","Singleleaf pinyon","Sugar pine","Washoe pine","Western juniper","Western white pine","White fir", "Whitebark pine","All species", "Unknown")
+
+vw98_spp_code = c("PSME","PISA","PIBA", "SEGI", "CADE", "PIJE", "PIAT", "PIFL", "PICO", "TSME", "PIPO", "ABMA", "PIMO1", "PILA", "PIWA", "JUOC", "PIMO2", "ABCO", "PIAL", "ALLSPP", "OTHER")
+
+vw98_Litter_coeff = c(0.864,0.111,0.886,0.990,1.276,0.358,0.339,0.889,0.951,1.102,0.276,0.530,0.906,0.304,0.600,0.832,0.542,1.050,0.540,0.363,0.363)
+
+vw98_Duff_coeff = c(1.319,1.448,2.504,1.648,1.675,1.707,1.646,2.337,1.671,1.876,1.402,1.727,2.592,1.396,1.870,1.798,1.422,1.518,1.895,1.750, 1.750)
+
+vw98_LitterDuff_coeff = c(1.295,1.220,2.360,1.632,1.664,1.496,1.274,2.255,1.612,1.848,1.233,1.722,2.478,1.189,1.719,1.763,1.485,1.572,1.802,1.624, 1.624)
+
+litterduff_coeffs = data.frame(species=vw98_spp,spp=vw98_spp_code,litter_coeff=vw98_Litter_coeff,duff_coeff=vw98_Duff_coeff,litterduff_coeff=vw98_LitterDuff_coeff)
+
+# Average squared quadratic mean diameter (cm-2) by fuel size class (cm) for 19 Sierra Nevada conifers
+# Source: van Wagtendonk et al. 1996, table 3
+
+vw96_spp = c("Abies concolor","Abies magnifica","Calocedrus decurrens","Juniperus occidentalis","Pinus albicaulis","Pinus attenuata","Pinus balfouriana","Pinus contorta","Pinus flexilis","Pinus jeffreyi","Pinus lambertiana","Pinus monophylla","Pinus monticola","Pinus ponderosa","Pinus sabiniana","Pinus washoensis","Pseudotsuga menziesii","Seguoiadendron giganteum","Tsuga mertensiana","All Species", "Other")
+
+vw96_spp_code = c("ABCO", "ABME", "CADE", "JUOC", "PIAL", "PIAT", "PIBA", "PICO", "PIFL", "PIJE", "PILA", "PIMO1", "PIMO2", "PIPO", "PISA", "PIWA", "PSME", "SEGI", "TSME", "ALLSPP", "OTHER")
+
+vw96_qmd_1h = c(0.08,0.10,0.09,0.08,0.13,0.10,0.12,0.10,0.21,0.15,0.12,0.09,0.08,0.23,0.14,0.22,0.06,0.14,0.05,0.12, 0.12)
+
+vw96_qmd_10h = c(1.32,1.32,1.23,1.61,1.21,1.25,0.92,1.44,1.28,1.25,1.46,1.41,0.79,1.56,0.94,1.37,1.37,1.28,1.46,1.28, 1.28)
+
+vw96_qmd_100h = c(11.56,16.24,20.79,13.92,14.75,9.68,12.82,13.39,17.72,17.32,13.61,11.56,9.92,19.36,12.91,13.47,12.04,17.06,13.61,14.52, 14.52)
+
+vw96_qmd_1000h = c(162.56,219.93,74.30,61.62,92.74,70.39,NA,138.06,115.78,135.49,169.52,129.96,NA,101.81,NA,122.77,75.69,167.70,115.99,127.24, 127.24)
+
+QMDcm = data.frame(species=vw96_spp,spp=vw96_spp_code,x1h=vw96_qmd_1h,x10h=vw96_qmd_10h,x100h=vw96_qmd_100h,x1000h=vw96_qmd_1000h)
+
+
+# Unit conversion constants (k-values, aka "const") from Van Wagner 1982, table 1
+kvals = data.frame(
+  fuel_diam = c("cm","cm","cm","cm","in","in","in","in"),
+  transect_length = c("m","m","m","m","ft","ft","ft","ft"),
+  volume_fuel_per_area = c("m^3/m^2","m^3/ha",NA,NA,"ft^3/ft^2","ft^3/ac",NA,NA),
+  weight_fuel_per_area = c(NA,NA,"kg/m^2","tons/ha",NA,NA,"lb/ft^2","tons/ac"),
+  k = c(0.0001234,1.234,0.1234,1.234,0.008567,373.3,0.5348,11.65)
+)
+
+# Average specific gravity by fuel size class (cm) for 19 Sierra Nevada conifers
+# Source: van Wagtendonk et al. 1996, table 8.
+# 
+
+vw96_sg_1000r = 0.36
+
+vw96_sg_1h = c(0.53,0.57,0.59,0.67,0.55,0.59,0.59,0.53,0.57,0.53,0.59,0.65,0.56,0.55,0.64,0.53,0.60,0.57,0.67,0.58,0.58)
+vw96_sg_10h = c(0.54,0.56,0.54,0.65,0.49,0.55,0.61,0.48,0.57,0.55,0.59,0.64,0.56,0.56,0.61,0.52,0.61,0.57,0.65,0.57,0.57)
+vw96_sg_100h = c(0.57,0.47,0.55,0.62,0.48,0.39,NA,0.54,0.54,0.55,0.52,NA,0.49,0.48,0.43,0.44,0.59,0.56,0.62,0.53,0.53)
+vw96_sg_1000s = c(0.32,0.38,0.41,NA,0.42,NA,NA,0.58,0.63,NA,0.43,NA,NA,0.40,NA,0.35,0.35,0.54,0.66,0.47,0.47)
+
+SG = data.frame(species=vw96_spp,spp=vw96_spp_code,x1h=vw96_sg_1h,x10h=vw96_sg_10h,x100h=vw96_sg_100h,x1000s=vw96_sg_1000s)
+
+# Average secant of acute angles of inclination of nonhorizontal particles by fuel size class (cm) for 19 Sierra Nevada conifers
+# Source: van Wagtendonk et al. 1996, table 6. Note that these values contradict the statement in the text that "The average secant of the acute angle to the horizontal for the 7.62+cm (3+ in) size class for asll species was 2.67 (Table 6)." I believe this statement is a typo, and that the values in the table are correct (they are more consistent with Brown 1974).
+
+vw96_sec_1h = c(1.03,1.03,1.02,1.03,1.02,1.03,1.02,1.02,1.02,1.03,1.04,1.02,1.03,1.02,1.05,1.02,1.03,1.02,1.04,1.03, 1.03)
+
+vw96_sec_10h = c(1.02,1.02,1.02,1.04,1.02,1.02,1.02,1.02,1.02,1.03,1.04,1.01,1.02,1.03,1.03,1.02,1.02,1.02,1.02,1.02,1.02)
+
+vw96_sec_100h = c(1.02,1.01,1.03,1.04,1.02,1.00,1.01,1.01,1.01,1.04,1.03,1.01,1.06,1.02,1.02,1.01,1.03,1.02,1.02,1.02,1.02)
+
+vw96_sec_1000h = c(1.01,1.00,1.06,1.04,1.02,1.02,NA,1.05,1.01,1.05,1.03,1.05,NA,1.01,NA,1.05,1.04,1.01,1.00,1.02,1.02)
+
+SEC = data.frame(species=vw96_spp,spp=vw96_spp_code,x1h=vw96_sec_1h,x10h=vw96_sec_10h,x100h=vw96_sec_100h,x1000h=vw96_sec_1000h)
+
+
+
+```
+
+####Transect length data
+
+```{r echo=FALSE}
+
+timelag_classes = c("x1h","x10h","x100h","x1000s","x1000r")
+
+transect_length_feet = c(6,6,10,37.2,37.2)
+
+transect_lengths = data.frame(timelag=timelag_classes,length_feet=transect_length_feet)
+
+transect_lengths["length_meters"] = transect_lengths$length_feet*0.3048
+
+
+```
+
+####Import and Initial Cleaning
+
+Importing direct measurements from BFRS inventory database. These provide an expanded range of measurements (in terms of years covered and data recorded). However, for years other than 2016, the BFRS database only includes measurements on regular BFRS inventory plots. (New plots at a higher sampling density were established and measured specifically for the FFS study.) The BFRS database *does* include the full set of FFS plots for 2016, which is the primary reason for including it here.
+
+```{r}
+
+# Set to pathway where you have saved this project
+setwd("D://Foster/FFS/Final_Package")
+
+BFRS.fuels_large = read.csv("Input_Tables/BFRS_Inventory_Database/Fuels - Large.csv",fileEncoding="UTF-8-BOM")
+
+BFRS.fuels_small = read.csv("Input_Tables/BFRS_Inventory_Database/Fuels - Small.csv",fileEncoding="UTF-8-BOM")
+
+BFRS.plot_inventory_activity = read.csv("Input_Tables/BFRS_Inventory_Database/Plot Inventory Activity.csv", fileEncoding = "UTF-8-BOM")
+
+BFRS.plots = read.csv("Input_Tables/BFRS_Inventory_Database/Plots.csv", fileEncoding = "UTF-8-BOM")
+
+BFRS.trees_fallen = read.csv("Input_Tables/BFRS_Inventory_Database/Trees - Fallen.csv", fileEncoding = "UTF-8-BOM")
+
+BFRS.trees_live = read.csv("Input_Tables/BFRS_Inventory_Database/Trees - Live.csv", fileEncoding = "UTF-8-BOM")
+
+BFRS.trees_snags = read.csv("Input_Tables/BFRS_Inventory_Database/Trees - Snags.csv", fileEncoding = "UTF-8-BOM")
+
+BFRS.trees_stumps = read.csv("Input_Tables/BFRS_Inventory_Database/Trees - Stumps.csv", fileEncoding = "UTF-8-BOM")
+
+#BFRS.regen = read.csv("Input_Tables/BFRS_Inventory_Database/Trees - Regen Tally Normal.csv", fileEncoding = "UTF-8-BOM")
+
+BFRS.understory = read.csv("Input_Tables/BFRS_Inventory_Database/Understory Vegetation.csv", fileEncoding= "UTF-8-BOM")
+
+BFRS.tree_names = read.csv("Input_Tables/BFRS_Inventory_Database/Tree Names.csv", fileEncoding = "UTF-8-BOM")
+
+```
+
+Importing direct measurements used in previous FFS studies:
+
+These tables include data from the full set of FFS plots, but only for the years 2001, 2002, 2003, and 2009. They measurements of the burn-only units in 2010 (after the fall 2009 burns).
+
+```{r}
+Additional.trees = read.csv("Input_tables/Tables_from_Previous_FFS/Additional_FFS_TreesAll.csv")
+
+Additional.fuels_small = read.csv("Input_tables/Tables_from_Previous_FFS/Additional_FFS_FuelsSmall.csv")
+
+Additional.fuels_large = read.csv("Input_tables/Tables_from_Previous_FFS/Additional_FFS_FuelsLarge.csv")
+
+
+
+```
+
+Importing the 2009 postburn data:
+
+I've discussed these data with Stephens, York, and Collins. I am going to use the immediate postburn measurements from 2009, which will allow comparison with immediate postburn measurements from the 2002 burns and the 2017 burns. 
+
+```{r}
+Postburn2.fuels_small = read.csv('Input_Tables/Tables_from_Previous_FFS/Postburn_2009_FuelsSmall.csv', fileEncoding = "UTF-8-BOM")
+
+Postburn2.fuels_large = read.csv('Input_Tables/Tables_from_Previous_FFS/Postburn_2009_FuelsLarge.csv', fileEncoding = "UTF-8-BOM")
+
+```
+
+Importing the 2017 postburn data:
+
+```{r}
+Postburn3.fuels_small = read.csv('Input_Tables/Postburn_2017_small_unburnedNA.csv', fileEncoding = "UTF-8-BOM")
+
+Postburn3.fuels_large = read.csv('Input_Tables/Postburn_2017_FuelsLarge_unburnedNA.csv', fileEncoding ="UTF-8-BOM")
+
+
+```
+
+
+Convert values of "-9" (used in BFRS database) to NA:
+
+```{r}
+
+# Some tree numbers are negative, so I'm changing all the treenum==-9 trees (two rows) to NAs, but I don't think it
+# actually matters later on
+
+BFRS.trees_live[BFRS.trees_live==-9]=NA
+BFRS.trees_live[BFRS.trees_live=="-9"]=NA
+
+BFRS.trees_snags[BFRS.trees_snags==-9]=NA
+BFRS.trees_snags[BFRS.trees_snags=="-9"]=NA
+
+BFRS.trees_fallen[BFRS.trees_fallen==-9]=NA
+BFRS.trees_fallen[BFRS.trees_fallen=="-9"]=NA
+
+BFRS.trees_stumps[BFRS.trees_stumps==-9]=NA
+BFRS.trees_stumps[BFRS.trees_stumps=="-9"]=NA
+
+BFRS.fuels_large[BFRS.fuels_large==-9]=NA
+BFRS.fuels_large[BFRS.fuels_large=="-9"]=NA
+
+BFRS.fuels_small[BFRS.fuels_small==-9]=NA
+BFRS.fuels_small[BFRS.fuels_small=="-9"]=NA
+
+BFRS.plot_inventory_activity[BFRS.plot_inventory_activity==-9]=NA
+BFRS.plot_inventory_activity[BFRS.plot_inventory_activity=="-9"]=NA
+
+BFRS.plots[BFRS.plots==-9]=NA
+BFRS.plots[BFRS.plots=="-9"]=NA
+
+```
+
+Reformatting dates for easy interpretation by R:
+
+```{r}
+# Convert imported table string "dates" to lubridate Date objects (note differing input formats for BFRS and additional tables)
+
+#install.packages("lubridate")
+library("lubridate")
+
+BFRS.fuels_small["Invdate"] = as.Date(BFRS.fuels_small$Invdate, "%d-%b-%y")
+BFRS.fuels_large["Invdate"] = as.Date(BFRS.fuels_large$Invdate, "%d-%b-%y")
+BFRS.trees_live["Invdate"] = as.Date(BFRS.trees_live$Invdate, "%d-%b-%y")
+BFRS.trees_snags["Invdate"] = as.Date(BFRS.trees_snags$Invdate, "%d-%b-%y")
+BFRS.trees_fallen["Invdate"] = as.Date(BFRS.trees_fallen$Invdate, "%d-%b-%y")
+BFRS.trees_stumps["Invdate"] = as.Date(BFRS.trees_stumps$Invdate, "%d-%b-%y")
+
+
+Additional.trees["Invdate"] = as.Date(Additional.trees$Invdate, "%m/%d/%Y")
+Additional.fuels_small["Invdate"] = as.Date(Additional.fuels_small$Invdate, "%m/%d/%Y")
+Additional.fuels_large["Invdate"] = as.Date(Additional.fuels_large$Invdate, "%m/%d/%Y")
+
+Postburn2.fuels_small['Invdate'] = as.Date(Postburn2.fuels_small$Invdate, "%m/%d/%Y")
+Postburn2.fuels_large['Invdate'] = as.Date(Postburn2.fuels_large$Invdate, "%m/%d/%Y")
+
+Postburn3.fuels_small['Invdate'] = as.Date(Postburn3.fuels_small$Invdate, "%m/%d/%y")
+Postburn3.fuels_large['Invdate'] = as.Date(Postburn3.fuels_large$Invdate, "%m/%d/%y")
+
+
+```
+
+Converting azimuth values for Additional fuels transects from factor to numeric:
+
+```{r}
+
+# Note: as.integer(factor) produces unexpected behavior, silently changing the values of azimuth recorded. I think it's automatically converting the levels to integers or something. Converting to character first and then to integer avoids the problem.
+
+Additional.fuels_large$Azimuth = as.integer(as.character(Additional.fuels_large$Azimuth))
+
+Additional.fuels_small$Azimuth = as.integer(as.character(Additional.fuels_small$Azimuth)) # 180-00006 in december 2002 "plot not within burned area"
+
+Postburn2.fuels_large$Azimuth = as.integer(as.character(Postburn2.fuels_large$Azimuth))
+
+Postburn2.fuels_small$Azimuth = as.integer(as.character(Postburn2.fuels_small$Azimuth))
+
+
+Postburn3.fuels_large$Azimuth = as.integer(as.character(Postburn3.fuels_large$Azimuth))
+
+Postburn3.fuels_small$Azimuth = as.integer(as.character(Postburn3.fuels_small$Azimuth))
+
+
+```
+
+
+
+
+
+Many of the "duplicate" rows are all blanks, or are marked in the source file with "-9". Locate, find the number of, and drop rows that have NAs in the key measurements (not doing this for the 2009 postburn data, where NA means the plot was unburned):
+
+```{r}
+# First, just count the number of bad rows:
+
+# Fuels_small
+
+length(BFRS.fuels_small[is.na(BFRS.fuels_small$To.24Inch)|is.na(BFRS.fuels_small$InvID)|!is.numeric(BFRS.fuels_small$Azimuth),"InvID"])
+
+length(Additional.fuels_small[is.na(Additional.fuels_small$To.24Inch)|is.na(Additional.fuels_small$InvID)|!is.numeric(Additional.fuels_small$Azimuth),"InvID"])
+
+# Fuels_large
+
+length(BFRS.fuels_large[is.na(BFRS.fuels_large$Size)|is.na(BFRS.fuels_large$InvID)|!is.numeric(BFRS.fuels_large$Azimuth),"InvID"])
+
+length(Additional.fuels_large[is.na(Additional.fuels_large$sum_d2cm_S)|is.na(Additional.fuels_large$InvID)|!is.numeric(Additional.fuels_large$Azimuth),"InvID"])
+
+# Treelists
+
+length(BFRS.trees_live[is.na(BFRS.trees_live$Treenum)|is.na(BFRS.trees_live$dbh),"InvID"])
+length(BFRS.trees_snags[is.na(BFRS.trees_snags$Treenum)|is.na(BFRS.trees_snags$dbh),"InvID"])
+length(BFRS.trees_fallen[is.na(BFRS.trees_fallen$Treenum),"InvID"])
+length(BFRS.trees_stumps[is.na(BFRS.trees_stumps$Treenum)|is.na(BFRS.trees_stumps$dbh),"InvID"])
+
+
+length(Additional.trees[is.na(Additional.trees$Treenum)|is.na(Additional.trees$dbh),"InvID"])
+
+
+# Next, Examine any problematic sets manually 
+BFRS.fuels_small[is.na(BFRS.fuels_small$To.24Inch)|is.na(BFRS.fuels_small$InvID)|!is.numeric(BFRS.fuels_small$Azimuth),] # all NA rows, drop all
+
+Additional.fuels_small[is.na(Additional.fuels_small$To.24Inch)|is.na(Additional.fuels_small$InvID)|is.na(Additional.fuels_small$Azimuth),] # all NA rows except for one mostly NA row, drop all
+
+
+BFRS.trees_live[is.na(BFRS.trees_live$Treenum)|is.na(BFRS.trees_live$dbh),] # I want to drop the IC in plot 490-24, and also the WF in 180-6. However, I'd like to keep the WF in 60-115, because it's clearly still alive and large enough to have an effect on the BA prediction from the plot
+
+BFRS.trees_live[BFRS.trees_live$PlotID=="0060-00115"&BFRS.trees_live$Treenum==11,] # in 2010, the tree was 18.7 dbh and 5' shorter. Conservatively, I'll add 0.1" dbh to estimate the 2016 height. This is probably an underestimate, but better than dropping the tree from the plot's basal area calculations entirely.
+
+BFRS.trees_live[BFRS.trees_live$InvID==7083&BFRS.trees_live$Treenum==11,"dbh"] = 18.8
+
+
+# Dropping all problematic sets
+
+# old version 3 way, was resulting in all-NA rows:
+#BFRS.fuels_small = BFRS.fuels_small[!is.na(BFRS.fuels_small$To.24Inch)&!is.na(BFRS.fuels_small$InvID)&is.numeric(BFRS.fuels_small$Azimuth),] 
+
+
+# new version 4 way, per stack exchange recommendation:
+essential_columns = c('InvID','PlotID','Invdate','Azimuth','To.24Inch','To1Inch','To3Inch','X1FtDuff','X1FtLitter','X3FtDuff','X3FtLitter')
+
+essential_columns
+
+BFRS.fuels_small = BFRS.fuels_small[complete.cases(BFRS.fuels_small[,essential_columns])&is.numeric(BFRS.fuels_small$Azimuth),]
+
+BFRS.fuels_small[!complete.cases(BFRS.fuels_small[,essential_columns]),]
+
+BFRS.fuels_small[BFRS.fuels_small$InvID==6607,]
+
+#Additional.fuels_small = Additional.fuels_small[!is.na(Additional.fuels_small$To.24Inch)&!is.na(Additional.fuels_small$InvID)&is.numeric(Additional.fuels_small$Azimuth),]
+Additional.fuels_small = Additional.fuels_small[complete.cases(Additional.fuels_small[,essential_columns])&is.numeric(Additional.fuels_small$Azimuth),]
+
+BFRS.trees_live = BFRS.trees_live[complete.cases(BFRS.trees_live[,c('Treenum','dbh')]),]
+#BFRS.trees_live = BFRS.trees_live[!is.na(BFRS.trees_live$Treenum)&!is.na(BFRS.trees_live$dbh),]
+
+```
+
+De-duplicate remaining rows:
+
+Note: It's impossible to confidently de-deuplicate BFRS fuels_large, as there's no way to tell whether a duplicate row is a mistake, or whether it represents another intersetion of the same size and sound/rotten class:
+
+
+```{r}
+
+# Checking BFRS Fuels Small
+
+# Added duplicates columns to provide additional filtering against "by chance" matches that don't appear to actually be duplicates
+
+fscheck = c("Invdate","Azimuth","To.24Inch","To1Inch","To3Inch","X1FtDuff")
+
+test = BFRS.fuels_small[duplicated(BFRS.fuels_small[,fscheck])|duplicated(BFRS.fuels_small[,fscheck],fromLast = TRUE),]
+
+test[order(test$Azimuth),] # There are duplicate inventory events (same plotID, only want to drop one) and duplicate plots (different plotIDs, dont know which is correct)
+
+# It looks like theres 2x duplicate transects for 180-00001 and 180-00006, theres 3x of a transect for 040-00002 and 040-000003, and the rest are just duplicate rows. Complicated to drop them right...
+
+# are these cases of typos in PlotID?
+
+pids = unique(BFRS.fuels_small$PlotID)
+
+dpids = unique(BFRS.fuels_small[duplicated(BFRS.fuels_small[,c("Invdate","Azimuth","To.24Inch")]),"PlotID"])
+
+setdiff(dpids,pids)
+
+# no they're not
+
+BFRS.fuels_small[is.element(BFRS.fuels_small$PlotID,c("0040-00003","0040-00002")),] # this is confusing, what happened in 2009?
+
+# I'm not even really going to use these right now (they are from the BFRS database, but don't include any 2016 measurements), just drop all of them for the time being
+
+BFRS.fuels_small = BFRS.fuels_small[!duplicated(BFRS.fuels_small[,fscheck])&!duplicated(BFRS.fuels_small[,fscheck],fromLast = TRUE),]
+
+BFRS.fuels_small[BFRS.fuels_small$InvID==6607|BFRS.fuels_small$InvID==5953,] # later QC checks revealed that this duplicate didn't get dropped
+
+# so drop it
+BFRS.fuels_small = BFRS.fuels_small[BFRS.fuels_small$InvID!=6607&BFRS.fuels_small$InvID!=5953,]
+
+
+# Checking Additional fuels small
+
+test = Additional.fuels_small[duplicated(Additional.fuels_small[,fscheck])|duplicated(Additional.fuels_small[,fscheck],fromLast = TRUE),]
+
+test[order(test$Azimuth),] # In this case, I don't want to drop all 6 of these rows. The two measurements from 2009 are not actually duplicates
+
+Additional.fuels_small[duplicated(Additional.fuels_small[,append(fscheck,"PlotID")])|duplicated(Additional.fuels_small[,append(fscheck,"PlotID")],fromLast=TRUE),]
+
+# I want to keep half of these
+Additional.fuels_small = Additional.fuels_small[!duplicated(Additional.fuels_small[,append(fscheck,"PlotID")]),]
+
+# Checking BFRS trees_live
+
+tlcheck = c("Invdate","Treenum","PlotID") 
+
+test = BFRS.trees_live[duplicated(BFRS.trees_live[,tlcheck])|duplicated(BFRS.trees_live[,tlcheck],fromLast=TRUE),]
+
+test[order(test$InvID),] # these look like duplicates, not sure what happened but there's identical (down to the actual measurements) treelists with different invids for the same plot/date. Drop only half the duplicates (don't need to make assumptions about which plot/date the measurements belong to, only the invids are different between duplicates and those are arbitrary in any case)
+
+BFRS.trees_live = BFRS.trees_live[!duplicated(BFRS.trees_live[,tlcheck]),]
+
+# Checking Additional trees_live
+
+tlcheck = append(tlcheck,"dbh")
+
+tlcheck = append(tlcheck,"Species")
+
+test = Additional.trees[duplicated(Additional.trees[,tlcheck])|duplicated(Additional.trees[,tlcheck],fromLast=TRUE),]
+
+test[order(test$InvID),] # Again, we only want to drop half of the duplicates
+
+Additional.trees = Additional.trees[!duplicated(Additional.trees[,tlcheck]),]
+
+# Checking additional fuels large
+head(Additional.fuels_large)
+
+flcheck = c("Invdate","Azimuth","sum_d2cm_R","sum_d2cm_S")
+
+test = Additional.fuels_large[duplicated(Additional.fuels_large[,flcheck])|duplicated(Additional.fuels_large[,flcheck],fromLast=TRUE),]
+
+test[order(test$Invdate),] # looks like a lot of plots that share azimuth, rather than actual duplicates
+
+flcheck = append(flcheck,"PlotID")
+
+test = Additional.fuels_large[duplicated(Additional.fuels_large[,flcheck])|duplicated(Additional.fuels_large[,flcheck],fromLast=TRUE),]
+
+test[order(test$Invdate),] # Actual duplicates, drop half
+
+Additional.fuels_large = Additional.fuels_large[!duplicated(Additional.fuels_large[,flcheck]),]
+
+# Reviewing the final numbers revealed a highly suspect fuels measurement for 380-127 in 2016 (41" of duff):
+BFRS.fuels_small[BFRS.fuels_small$InvID==7279&BFRS.fuels_small$Azimuth==192,'X3FtDuff'] = 4
+
+```
+
+
+####Flag Data sources
+
+Flagging all rows with a tag indicating the row's source will (in theory) make it easier to check and control which set of data I'm using at any given time, which is important because there is some overlap between the two datasets. The sources are:
+
+"BFRS" - from the FFSCompsOnly access databases from Rob York. For most years (not 2016), these only include the regular BFRS inventory plots, not the extra FFS plots.
+
+"FFS" - from the Additional tables I put together based on data from Moghaddas, Collins, and Roller.
+
+Postburn 2017 measurements (collected by BFRS staff with funding from Stephens lab) are labeled as "BFRS" as the source, because they will be matched to the 2016 BFRS treelists.
+
+```{r}
+BFRS.trees_live["Source"] = "BFRS"
+BFRS.trees_snags["Source"] = "BFRS"
+BFRS.fuels_small["Source"] = "BFRS"
+BFRS.fuels_large["Source"] = "BFRS"
+
+Additional.fuels_large["Source"] = "FFS"
+Additional.fuels_small["Source"] = "FFS"
+Additional.trees["Source"] = "FFS"
+
+Postburn2.fuels_small["Source"] = "FFS"
+Postburn2.fuels_large["Source"] = "FFS"
+
+Postburn3.fuels_small["Source"] = "BFRS"
+Postburn3.fuels_large["Source"] = "BFRS"
+```
+
+####Fixing mislabeled plots
+
+```{r}
+
+
+# Additional fuels_small plots 0350-00010 and 0380-00025 are mislabeled, so fix them:
+Additional.fuels_small[Additional.fuels_small$PlotID=='0350-00010','PlotID'] = '0350-00101'
+Additional.fuels_small[Additional.fuels_small$InvID==20090635010,'InvID'] = 200906350101
+
+Additional.fuels_small[Additional.fuels_small$PlotID=='0380-00025','PlotID'] = '0380-00002'
+Additional.fuels_small[Additional.fuels_small$InvID==20030738025,'InvID'] = 2003073802
+
+
+# Fix the same issue in fuels_large:
+Additional.fuels_large[Additional.fuels_large$PlotID=='0350-00010','PlotID'] = '0350-00101'
+Additional.fuels_large[Additional.fuels_large$InvID==20090635010,'InvID'] = 200906350101
+Additional.fuels_large[Additional.fuels_large$PlotID=='0380-00025','PlotID'] = '0380-00002'
+Additional.fuels_large[Additional.fuels_large$InvID==20030738025,'InvID'] = 2003073802
+
+# Other mislabeled plots identified by Ariel Thompson and Brandon Collins:
+# need to add these plots to the factor levels for plotID
+
+levels(BFRS.trees_live$PlotID) = c(levels(BFRS.trees_live$PlotID),c('0240-00109','0490-00030','0490-00115'))
+levels(BFRS.trees_snags$PlotID) = c(levels(BFRS.trees_snags$PlotID),c('0240-00109','0490-00030','0490-00115'))
+levels(BFRS.trees_fallen$PlotID) = c(levels(BFRS.trees_fallen$PlotID),c('0240-00109','0490-00030','0490-00115'))
+levels(BFRS.trees_stumps$PlotID) = c(levels(BFRS.trees_stumps$PlotID),c('0240-00109','0490-00030','0490-00115'))
+levels(BFRS.fuels_small$PlotID) = c(levels(BFRS.fuels_small$PlotID),c('0240-00109','0490-00030','0490-00115'))
+levels(BFRS.fuels_large$PlotID) = c(levels(BFRS.fuels_large$PlotID),c('0240-00109','0490-00030','0490-00115'))
+
+
+# BFRS 2016 "0240-00009" invID 7158 is actually plot 0240-00109 
+BFRS.trees_live[BFRS.trees_live$InvID==7158,]
+BFRS.trees_live[BFRS.trees_live$InvID==7158,'PlotID'] = '0240-00109'
+BFRS.trees_snags[BFRS.trees_snags$InvID==7158,'PlotID'] = '0240-00109'
+BFRS.trees_fallen[BFRS.trees_fallen$InvID==7158,'PlotID'] = '0240-00109'
+BFRS.trees_stumps[BFRS.trees_stumps$InvID==7158,'PlotID'] = '0240-00109'
+BFRS.fuels_small[BFRS.fuels_small$InvID==7158,'PlotID'] = '0240-00109'
+BFRS.fuels_large[BFRS.fuels_large$InvID==7158,'PlotID'] = '0240-00109'
+
+# BFRS 2016 "0490-00003" INVID 7204 is actually plot 0490-00033
+BFRS.trees_live[BFRS.trees_live$InvID==7204,'PlotID'] = '0490-00033'
+BFRS.trees_snags[BFRS.trees_snags$InvID==7204,'PlotID'] = '0490-00033'
+BFRS.trees_fallen[BFRS.trees_fallen$InvID==7204,'PlotID'] = '0490-00033'
+BFRS.trees_stumps[BFRS.trees_stumps$InvID==7204,'PlotID'] = '0490-00033'
+BFRS.fuels_small[BFRS.fuels_small$InvID==7204,'PlotID'] = '0490-00033'
+BFRS.fuels_large[BFRS.fuels_large$InvID==7204,'PlotID'] = '0490-00033'
+
+# BFRS 2016 "0490-00015" invID 7213 is actually plot 0490-00115
+
+BFRS.trees_live[BFRS.trees_live$InvID==7213,'PlotID'] = '0490-00115'
+BFRS.trees_snags[BFRS.trees_snags$InvID==7213,'PlotID'] = '0490-00115'
+BFRS.trees_fallen[BFRS.trees_fallen$InvID==7213,'PlotID'] = '0490-00115'
+BFRS.trees_stumps[BFRS.trees_stumps$InvID==7213,'PlotID'] = '0490-00115'
+BFRS.fuels_small[BFRS.fuels_small$InvID==7213,'PlotID'] = '0490-00115'
+BFRS.fuels_large[BFRS.fuels_large$InvID==7213,'PlotID'] = '0490-00115'
+
+# 0190-00005 is missing in 2009 (so is 190-00115)
+
+# 0340-00115 is missing in 2009
+
+# 0380-00002 is missing in 2003 and 2009 (addressed above: it was mislabeled as 0380-00025 in those years)
+
+# 0400-00103 is missing in 2001 - the measurements were mislabeled as being from unit 340
+Additional.fuels_small[Additional.fuels_small$PlotID=='0340-00103',] # note 4x transects in 2001, az 17 98 113 235
+Additional.fuels_small[Additional.fuels_small$PlotID=='0400-00103',] # no measurement for 2001, but Az for other years are 113 and 235
+Additional.trees[Additional.trees$PlotID=='0340-00103',] #uh oh...
+Additional.trees[Additional.trees$PlotID=='0400-00103',] # whew, the treelist is recorded OK
+
+Additional.fuels_large[Additional.fuels_large$PlotID=='0400-00103',] # large fuels also missing
+Additional.fuels_large[Additional.fuels_large$PlotID=='0340-00103',] #separated by azimuths! nifty
+
+Additional.fuels_small[Additional.fuels_small$PlotID=='0340-00103'&is.element(Additional.fuels_small$Azimuth,c(113,235)),'InvID'] = 200108400103
+Additional.fuels_small[Additional.fuels_small$PlotID=='0340-00103'&is.element(Additional.fuels_small$Azimuth,c(113,235)),'PlotID'] = '0400-00103'
+
+Additional.fuels_large[Additional.fuels_small$PlotID=='0340-00103'&is.element(Additional.fuels_small$Azimuth,c(113,235)),'InvID'] = 200108400103
+Additional.fuels_large[Additional.fuels_small$PlotID=='0340-00103'&is.element(Additional.fuels_small$Azimuth,c(113,235)),'PlotID'] = '0400-00103'
+
+Additional.fuels_small[Additional.fuels_small$PlotID=='0400-00103',]
+Additional.fuels_large[Additional.fuels_large$PlotID=='0400-00103',]
+# 0490-00035 is missing in 2009
+
+Additional.fuels_small[Additional.fuels_small$PlotID=='0060-00101',] # The azimuth is inconsistent. I believe this is an error in 2009 and 2010: 71 is the azimuth for a transect on 60-103. The post-burn2 measurements for 60-101 also have an az 86 transect.
+
+Additional.fuels_small[Additional.fuels_small$PlotID=='0060-00101'&Additional.fuels_small$Azimuth==71,'Azimuth'] = 86
+
+Additional.fuels_large[Additional.fuels_large$PlotID=='0060-00101'&Additional.fuels_large$Azimuth==71,'Azimuth'] = 86
+
+```
+
+
+
+
+##Create Complete Treelist (COMPLETE.trees_all)
+
+
+###Create BFRS.trees_all
+
+Create and fill "status" columns for FFSCompsOnly tree lists
+
+```{r}
+BFRS.trees_live["Status"] = "Live"
+BFRS.trees_snags["Status"] = "Snag"
+BFRS.trees_fallen["Status"] = "Fallen"
+BFRS.trees_stumps["Status"] = "Stump"
+```
+
+####Merge BFRS.trees_live and BFRS.trees_snags to create trees_all
+
+```{r}
+# The column names for the aggregated data frame is the aggregate/unique list of names of the component data frames
+newnames = unique(c(names(BFRS.trees_live),names(BFRS.trees_snags),names(BFRS.trees_fallen),names(BFRS.trees_stumps)))
+
+# make a blank aggregate data frame:
+BFRS.trees_all = data.frame(matrix(ncol=length(newnames),nrow=0))
+
+colnames(BFRS.trees_all) = newnames
+
+# Append individual tables to data frame
+
+
+BFRS.trees_all = merge(BFRS.trees_all,BFRS.trees_live,all=TRUE)
+BFRS.trees_all = merge(BFRS.trees_all,BFRS.trees_snags,all=TRUE)
+#BFRS.trees_all = merge(BFRS.trees_all,BFRS.trees_fallen,all=TRUE)
+#BFRS.trees_all = merge(BFRS.trees_all,BFRS.trees_stumps,all=TRUE)
+
+# Quick QC
+
+length(BFRS.trees_all$Treenum)==sum(length(BFRS.trees_live$Treenum),length(BFRS.trees_snags$Treenum))
+
+```
+
+####Fixing bad entries which were identified in earlier versions
+
+```{r}
+
+# InvID 1701 again has a single snag with a misnumbered plotID
+
+BFRS.trees_all[BFRS.trees_all$InvID==1701&as.character(BFRS.trees_all$PlotID)!="0380-00027","PlotID"] = "0380-00027"
+
+# InvID 3143 there's a single tree which was "missed" in the year of the measurement, and it looks like the data were later filled in the next year, but the "invdate" is off by two days
+
+BFRS.trees_all[BFRS.trees_all$InvID==3143&BFRS.trees_all$Treenum==3,"Invdate"] = as.Date("1998-08-05")
+
+
+# InvID 6811 only treenum 21 has a date listed
+BFRS.trees_all[BFRS.trees_all$InvID==6811,"Invdate"] = as.Date("2014-08-15","%Y-%m-%d")
+
+# InvID 6817 only treenum 20 has a date listed
+BFRS.trees_all[BFRS.trees_all$InvID==6817,"Invdate"] = as.Date("2014-07-14","%Y-%m-%d")
+
+# Fuels_small for InvIDs 6811 and 6817 were also missing dates, added per above
+
+BFRS.fuels_small[BFRS.fuels_small$InvID==6811,"Invdate"] = as.Date("2014-08-15","%Y-%m-%d")
+BFRS.fuels_small[BFRS.fuels_small$InvID==6817,"Invdate"] = as.Date("2014-07-14","%Y-%m-%d")
+
+# InvIDs 200105190102 and 200106190102 are the two transects for a single plot, recorded a few days apart
+Additional.fuels_small[Additional.fuels_small$InvID==200106190102,'InvID'] = 200105190102
+Additional.fuels_large[Additional.fuels_large$InvID==200106190102,'InvID'] = 200105190102
+```
+
+
+
+####Include plotsize information to derive per-hectare information later
+
+```{r}
+BFRS.trees_all = merge(BFRS.trees_all,BFRS.plot_inventory_activity[,c("InvID","Plotsize")],by="InvID")
+
+```
+
+
+####Convert all measurements to metric equivalents
+
+**First, check that all measurements are currently in standard.** A good way would be to compare the mean, min, and max values for DBH and height in any given year
+
+```{r}
+yrs = unique(year(BFRS.trees_all$Invdate))
+
+yrs = sort(yrs)
+
+min_dbh = c()
+
+for (y in yrs){
+  m = min(BFRS.trees_all[year(BFRS.trees_all$Invdate)==y,"dbh"],na.rm=TRUE)
+  min_dbh = append(min_dbh,m)
+}
+
+max_dbh = c()
+
+for (y in yrs){
+  m = max(BFRS.trees_all[year(BFRS.trees_all$Invdate)==y,"dbh"],na.rm=TRUE)
+  max_dbh = append(max_dbh,m)
+}
+
+mean_dbh = c()
+
+for (y in yrs){
+  m = mean(BFRS.trees_all[year(BFRS.trees_all$Invdate)==y,"dbh"],na.rm=TRUE)
+  mean_dbh = append(mean_dbh,m)
+}
+
+num_unique_plots_pre = c()
+
+for (y in yrs){
+  l = length(unique(BFRS.trees_all[year(BFRS.trees_all$Invdate)==y,"PlotID"]))
+  num_unique_plots_pre = append(num_unique_plots_pre,l)
+}
+
+
+BFRS.overview = data.frame(year=yrs,NumPlotsPre=num_unique_plots_pre,min_dbh_pre=min_dbh,max_dbh_pre=max_dbh,mean_dbh_pre=mean_dbh)
+
+BFRS.overview
+
+```
+
+
+It looks like all measurements are on the same scale: There arent any max DBH values so high I'd expect them to be in cm, and the only year where the average is drastically different is 2006, with only one measurement. 
+
+However, it does look like the minimum dbh is not consistent from one year to the next, including, problematically, 2001 2003 and 2009.  I going to drop the too-small (DBH<4") trees, but I'm doing it after the conversion to metric and the inclusion of the Additional trees. 
+
+**Second, convert all measurements to metric.**
+
+Need to:
+convert dbh from in to cm
+convert theight from ft to m
+convert heightcb from ft to m
+convert radgrow 10 from in to cm
+convert radgrow5 from in to cm
+convert plotsize from ac to ha
+
+
+```{r}
+BFRS.trees_all["dbh"] = (BFRS.trees_all$dbh)*2.54
+BFRS.trees_all["Theight"] = BFRS.trees_all$Theight*0.3048
+BFRS.trees_all["Heightcb"] = BFRS.trees_all$Heightcb*0.3048
+BFRS.trees_all["Radgro10"] = BFRS.trees_all$Radgro10*2.54
+BFRS.trees_all["Radgro5"] = BFRS.trees_all$Radgro5*2.54
+BFRS.trees_all["Plotsize"] = BFRS.trees_all$Plotsize*0.404686
+```
+
+The "additional" treelist has two (really, three) different plot sizes, based on the ct/ha column in the tables I got from Brandon Collins. These are 0.004047ha, 0.04 ha, and 0.040469 ha. That is, those treelists include the small (<4.5" dbh, 11.4cm) trees from the subplot at the center of each plot. Most of these are too small, and wind up getting dropped later. However, even large (>4.5") dbh trees within the 0.01 acre subplot have the smaller plotsize, and get counted as representing 100 trees per acre (rather than 10) when figuring out the plot overstory. On its own, I would consider keeping this information (though I'd have to ask somebody about the statistical validity of doing so), but **the 2016 measurements do not include any information about whether trees were located within the 0.01ac subplot, and all are assumed to represent 10 trees per acre rather than 100.** In previous versions I had just dropped all trees < 10cm dbh. However, based on knowledge of BFRS inventory in 2016, I'm going to drop all trees < 4.5 inches (11.43cm) dbh. I'm also going to manually set all the plot sizes to 0.04047ha. This may not be accurate for older (pre-FFS) measurements, but it will be accurate for all FFS measurements. This will maintain consistency of data interpretation across all study years. 
+
+###Merge BFRS.trees_all and Additional.trees to create COMPLETE.trees_all
+
+
+```{r}
+prelength = length(BFRS.trees_all$Treenum)
+
+COMPLETE.trees_all = merge(BFRS.trees_all,Additional.trees,all=TRUE)
+
+
+postlength = length(COMPLETE.trees_all$Treenum)
+
+```
+
+####QC Checks
+
+#####Check number of unique plots in each year, before and after the merge of BFRS data and "Additional" ffs-only data.
+
+```{r}
+
+num_unique_plots_post = c()
+
+for (y in yrs){
+  l = length(unique(COMPLETE.trees_all[year(COMPLETE.trees_all$Invdate)==y,"PlotID"]))
+  num_unique_plots_post = append(num_unique_plots_post,l)
+}
+
+min_dbh = c()
+
+for (y in yrs){
+  m = min(COMPLETE.trees_all[year(COMPLETE.trees_all$Invdate)==y,"dbh"],na.rm=TRUE)
+  min_dbh = append(min_dbh,m)
+}
+
+max_dbh = c()
+
+for (y in yrs){
+  m = max(COMPLETE.trees_all[year(COMPLETE.trees_all$Invdate)==y,"dbh"],na.rm=TRUE)
+  max_dbh = append(max_dbh,m)
+}
+
+mean_dbh = c()
+
+for (y in yrs){
+  m = mean(COMPLETE.trees_all[year(COMPLETE.trees_all$Invdate)==y,"dbh"],na.rm=TRUE)
+  mean_dbh = append(mean_dbh,m)
+}
+
+BFRS.overview["min_dbh_post"] = min_dbh
+BFRS.overview["max_dbh_post"] = max_dbh
+BFRS.overview["mean_dbh_post"] = mean_dbh
+
+BFRS.overview["NumPlotsPost"] = num_unique_plots_post
+
+BFRS.overview # the drop of plot numbers from 2001/2003 to 2009 isn't real: 2001 and 2003 had multiple measurements in a year for the mech and mechburn plots
+
+prelength
+postlength
+
+#including this -9 cleaning step heare because I had it in the old version...
+
+COMPLETE.trees_all[COMPLETE.trees_all==-9]=NA #what?
+
+```
+
+
+####Filter to only large (>= 11.4cm dbh) trees and standardize plot sizes
+Dropping all the small (<11.43 cm dbh) trees.
+
+```{r}
+COMPLETE.trees_all = COMPLETE.trees_all[COMPLETE.trees_all$dbh>=11.4,]
+```
+
+Standardizing the plot sizes. Since I'm only including trees >=4.5" dbh, this won't cause me to underestimate tree counts. 
+
+```{r}
+# before
+unique(COMPLETE.trees_all$Plotsize)
+
+COMPLETE.trees_all[COMPLETE.trees_all$Plotsize<0.005,]
+
+# unify
+COMPLETE.trees_all['Plotsize'] = 0.04047
+
+```
+
+#####Check min, max, and median DBH in each year (after filtering)
+
+```{r}
+yrs = unique(year(COMPLETE.trees_all$Invdate))
+
+yrs = sort(yrs)
+
+min_dbh = c()
+
+for (y in yrs){
+  m = min(COMPLETE.trees_all[year(COMPLETE.trees_all$Invdate)==y,"dbh"],na.rm=TRUE)
+  min_dbh = append(min_dbh,m)
+}
+
+max_dbh = c()
+
+for (y in yrs){
+  m = max(COMPLETE.trees_all[year(COMPLETE.trees_all$Invdate)==y,"dbh"],na.rm=TRUE)
+  max_dbh = append(max_dbh,m)
+}
+
+mean_dbh = c()
+
+for (y in yrs){
+  m = mean(COMPLETE.trees_all[year(COMPLETE.trees_all$Invdate)==y,"dbh"],na.rm=TRUE)
+  mean_dbh = append(mean_dbh,m)
+}
+
+num_unique_plots = c()
+
+for (y in yrs){
+  l = length(unique(COMPLETE.trees_all[year(COMPLETE.trees_all$Invdate)==y,"PlotID"]))
+  num_unique_plots = append(num_unique_plots,l)
+}
+
+TREES.overview = data.frame(year=yrs,NumPlots=num_unique_plots,min_dbh=min_dbh,max_dbh=max_dbh,mean_dbh=mean_dbh)
+
+TREES.overview # looks good except for 2006, which will get dropped
+
+```
+
+####Filter to only live trees and snags
+
+```{r}
+unique(COMPLETE.trees_all$Status)
+
+COMPLETE.trees_all = COMPLETE.trees_all[COMPLETE.trees_all$Status=="Live"|COMPLETE.trees_all$Status=="Snag",]
+
+unique(COMPLETE.trees_all$Status)
+
+```
+
+####Standardizing species codes
+
+Converting everything to 4-letter scientific. This code is currently (as of version 3) closely tailored to the species data that appeared in this project. If you want to use this code on other data you'll have to look carefully at this section.
+
+
+```{r}
+unique(COMPLETE.trees_all$Species)
+
+
+# must convert species from factor to string
+
+COMPLETE.trees_all["Species"] = as.character(COMPLETE.trees_all$Species)
+
+# assign all NAs to "OTHER" spp
+
+COMPLETE.trees_all[is.na(COMPLETE.trees_all$Species),"Species"] = "OTHER"
+
+# First, clean up observed species typos
+
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="Df","Species"] = "DF"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="ic","Species"] = "IC"
+```
+
+Now, convert all blodgett 2-common species codes to 4-scientific codes:
+
+Current FFSCompsOnly species codes to change:
+
+```{r echo=FALSE}
+BFRS.tree_names
+```
+
+4-letter equivalents drawn from FFSCompsOnly "Plant Codes and Names" and van Wagtendonk et al. 1996 / 1998. Some 4-letter codes (GEnus SPecies) are ambiguous from those tables, but none of those species are included in the FFS data.
+
+The predominant species in the FFS plots are the five sierra nevada mixed conifers (ABCO, CADE, PSME, PIPO, PILA) plus tanoak and black oak. Species other than these will be converted to "other" for now.
+
+```{r}
+
+
+
+# Converting blogett codes
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="AL","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="BO","Species"] = "QUKE"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="CH","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="DF","Species"] = "PSME"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="DW","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="GS","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="HW","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="IC","Species"] = "CADE"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="LO","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="LP","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="MA","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="MC","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="MD","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="NM","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="PP","Species"] = "PIPO"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="SP","Species"] = "PILA"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="TO","Species"] = "LIDE"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="WF","Species"] = "ABCO"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="XX","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="YW","Species"] = "OTHER"
+
+# Converting codes from Additional
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="UNK","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="CHSE","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="CONU","Species"] = "OTHER"
+COMPLETE.trees_all[COMPLETE.trees_all$Species=="ARME","Species"] = "OTHER"
+
+
+# Now convert species list back to factor
+
+COMPLETE.trees_all["Species"] = as.factor(COMPLETE.trees_all$Species)
+
+unique(COMPLETE.trees_all$Species)
+
+```
+
+###Aggregate treelists to by-plot overstory metrics:
+
+####Create calculated columns for count/ha, BA, BA/ha, and (trivially) count:
+
+```{r}
+COMPLETE.trees_all["Count.ha"] = 1/(COMPLETE.trees_all$Plotsize)
+COMPLETE.trees_all["BA.m"] = (pi*((COMPLETE.trees_all$dbh/2)^2))/10000
+COMPLETE.trees_all["BA.mha"] = COMPLETE.trees_all$BA.m*COMPLETE.trees_all$Count.ha
+COMPLETE.trees_all["Count"] = 1
+```
+
+####FORK HERE FOR DBH DISTRIBUTION
+
+####Create COMPLETE.trees_agg
+
+Do a big aggregate, getting sum/mean/sd for all the numerical values, aggregating on species/status/invdate/plotid/invid/source to create Plots.trees.complete
+
+```{r}
+COMPLETE.trees_agg = aggregate(cbind(dbh,Count,Count.ha,BA.m,BA.mha)~Species+Status+Invdate+PlotID+InvID+Source,data=COMPLETE.trees_all,FUN=function(x){c(sum=sum(x),mean=mean(x),sd=sd(x))})
+
+head(COMPLETE.trees_agg)
+
+```
+
+####QC Checks
+
+```{r}
+# QC check: Have the duplicate entries (plots included in both FFSCompsOnly and Additional data) already been merged?
+
+# This test is somewhat redundant since version 3, because with the "Source" column I'm less woried about accidentally aggregating the data before i mean to
+
+# pick a plot to test
+test = COMPLETE.trees_agg[COMPLETE.trees_agg$Invdate=="2010-06-10"&COMPLETE.trees_agg$PlotID=="0060-00021",]
+
+test
+
+# from the BFRS data
+test1 = test[test$InvID==6118,]
+
+# from the additional data
+test2 = test[test$InvID!=6118,]
+
+sum(test1$BA.m[,1])
+
+sum(test2$BA.m[,1])
+```
+
+Total BA in both lists is close (within .001m^2) but not exact. 
+
+They have not already been merged, but the two treelists are slightly different. Same number of total trees, but disagreement on status. I trust the BFRS data for 2010 more: BFRS statuses are drawn from actual measurements, FFS statuses for 2010 I have tried to reconstruct by looking at 2009 trees. I should avoid doing overstory analysis of the 2010 measurements. (Raw datasheets for 2010 are available for comparison, if I decide to use this.) This won't affect fuel load estimates, because for those I'm lumping live and dead trees anyways.
+
+####Filter to only meaningful aggregated values (create COMPLETE.treelist)
+
+We're tossing meaningless values (like the average of "count") and keeping the useful ones (sum of "count" to get the number of trees per species/plot). 
+
+```{r}
+COMPLETE.treelist = data.frame(Source=COMPLETE.trees_agg$Source,
+                               InvID=COMPLETE.trees_agg$InvID,
+                               PlotID=COMPLETE.trees_agg$PlotID,
+                               Invdate=COMPLETE.trees_agg$Invdate,
+                               Status=COMPLETE.trees_agg$Status,
+                               Species=COMPLETE.trees_agg$Species,
+                               dbh.mean=COMPLETE.trees_agg$dbh[,2],
+                               dbh.sd=COMPLETE.trees_agg$dbh[,3],
+                               count=COMPLETE.trees_agg$Count[,1],
+                               count.ha=COMPLETE.trees_agg$Count.ha[,1],
+                               BA.m.sum=COMPLETE.trees_agg$BA.m[,1],
+                               BA.m.mean=COMPLETE.trees_agg$BA.m[,2],
+                               BA.m.sd=COMPLETE.trees_agg$BA.m[,3],
+                               BA.mha.sum=COMPLETE.trees_agg$BA.mha[,1])
+
+
+```
+
+####Filter to only immediately useful values (create TreePivots.pre)
+
+Subset COMPLETE.treelist, keeping only the values I intend to actually use. Here, I am tossing meaningful values, such as the standard deviation of individual trees' basal area. If I do decide to look at the distribution of sizes within a plot, I should do so before aggregating by species, at the point marked "FORK HERE".
+
+```{r}
+TreePivots.pre = subset(COMPLETE.treelist,select=c(Source,InvID,PlotID,Invdate,Status,Species,count.ha,BA.m.sum,BA.mha.sum))
+
+```
+
+####Prepare proportion of total BA column
+
+Per Roller's calculations for the 2012 paper, I am going to include both live and dead trees for the purposes of calculating the overstory species composition for fuel load calculations. Both live and dead trees contribute fuels, so including both live and dead when estimating the species composition of fuels is reasonable.
+
+
+```{r}
+#get total BA/ha for all species in a source-plot-measurement
+TreePivots.pre.allspp = aggregate(BA.mha.sum~InvID+Source,data=TreePivots.pre[,c("Source","InvID","BA.mha.sum")],FUN=sum)
+
+
+TreePivots.pre.allspp["BA.mha.AllSpp"] = TreePivots.pre.allspp$BA.mha.sum
+
+
+TreePivots.pre = merge(x=TreePivots.pre,y=TreePivots.pre.allspp[,c("Source","InvID","BA.mha.AllSpp")],by=c("Source","InvID"))
+
+# Get the proportion of total plot-measurement BA represented by each tree in the treelist
+TreePivots.pre["pBA"] = TreePivots.pre$BA.mha.sum/TreePivots.pre$BA.mha.AllSpp
+
+# Check that we didn't accidentally combine BFRS and FFS treelists there
+
+TreePivots.pre[TreePivots.pre$Invdate=="2010-06-10"&TreePivots.pre$PlotID=="0060-00021",] # no it's all good
+
+```
+
+###Create TreePivots
+
+We want a data frame with the columns:
+
+InvID | PlotID | Invdate | Live ABCO count.ha | Live ABCO BA.mha | Dead ABCO count.ha | Dead ABCO BA.mha | ...etc... | Total LIve count.ha | Tota Live BA.mha | etc...
+
+```{r}
+
+#install.packages("reshape2")
+library("reshape2")
+
+
+molten = melt(TreePivots.pre,id.vars=c("InvID","Source","PlotID","Invdate","Status","Species"),measure.vars=c("count.ha","BA.mha.sum","pBA"))
+
+TreePivots = dcast(molten,InvID+Source+PlotID+Invdate~variable+Status+Species,margins=c("Species","Status"),fun.aggregate=sum)
+
+
+head(TreePivots)
+
+
+```
+
+####Add a "year" column
+
+Be careful: This is problematic because some years (2001, 2002, 2003) may have multiple distinct measurements. "Year*PlotID" is not a unique identifier. 
+
+```{r}
+TreePivots['Year'] = year(TreePivots$Invdate)
+
+```
+
+####QC checks on TreePivots
+
+```{r}
+
+head(TreePivots)
+
+# Did I change the number of unique plots?
+
+before = length(unique(TreePivots.pre$PlotID))
+
+after = length(unique(TreePivots$PlotID))
+
+before == after # no
+
+# Did i change the number of unique invids?
+
+before = length(unique(TreePivots.pre$InvID))
+
+after = length(unique(TreePivots.pre$InvID))
+
+before == after # no
+
+# Is each InvID unique?
+
+n2_occur = data.frame(table(TreePivots$InvID))
+
+n2_occur[n2_occur$Freq!=1,] # Yes
+
+
+# How does the distribution look?
+
+
+hist(TreePivots$`count.ha_Live_(all)`) # lets look at those high outliers
+
+TreePivots[TreePivots$`count.ha_Live_(all)`>1000,] # for example plot 240-00022 actually does have a lot of non-duplicate ~20cm CADE. This is on the upper end of reasonable. 
+
+hist(TreePivots$`BA.mha.sum_Live_(all)`)
+
+120*4.356 # BA of 120m2/ha is also on the upper end of reasonable. That is very high. 
+
+TreePivots[TreePivots$`BA.mha.sum_Live_(all)`>110,] # again though, spot-checking looks OK. Brandon's calculations for the overstory match for 40-112, and the plot has some really big trees
+
+plot(TreePivots$`count.ha_Live_(all)`~TreePivots$`BA.mha.sum_Live_(all)`)
+
+
+# Looking at overall
+mean(TreePivots$`count.ha_Live_(all)`)
+
+mean(TreePivots$`BA.mha.sum_Live_(all)`)
+
+# or in standard...
+
+mean(TreePivots$`count.ha_Live_(all)`)/2.47105
+  
+mean(TreePivots$`BA.mha.sum_Live_(all)`)*4.356
+
+
+```
+
+QC looks good. Spot-checking some of the high outliers indicates A) consensus with Brandon's calculations and B) consistency with treelists.
+
+##Incorporate fuels measurements
+
+###Prepwork
+
+####Convert BFRS.fuels_small measurements to metric
+
+First, convert all BFRS.fuels_small measurements to metric. I know that at least the 2003 data are already in metric (based on earlier work). We can look at the fuelbed depth measurements (which will be in cm if metric or inches in standard) and compare the unknown BFRS values to the (known as metric) additional values. I've chosen fuelbed depth because with the highest maximum values, the differene between metric and standard measurements will be most exagerrated. 
+
+```{r}
+# Getting median, maximum, and mean fueldepth for each year for FFScompsonly tables
+
+yrs = sort(unique(year(BFRS.fuels_small$Invdate)))
+
+num_unique_plots_bfrs = c()
+
+for (y in yrs){
+  l = length(unique(BFRS.fuels_small[year(BFRS.fuels_small$Invdate)==y,"PlotID"]))
+  num_unique_plots_bfrs = append(num_unique_plots_bfrs,l)
+}
+  
+med_X1FtFuel = c()
+
+for (y in yrs){
+  m = median(BFRS.fuels_small[year(BFRS.fuels_small$Invdate)==y,"X1FtFuel"],na.rm=TRUE)
+  med_X1FtFuel = append(med_X1FtFuel,m)
+}
+
+max_X1FtFuel = c()
+
+for (y in yrs){
+  m = max(BFRS.fuels_small[year(BFRS.fuels_small$Invdate)==y,"X1FtFuel"],na.rm=TRUE)
+  max_X1FtFuel = append(max_X1FtFuel,m)
+}
+
+mean_X1FtFuel = c()
+
+for (y in yrs){
+  m = mean(BFRS.fuels_small[year(BFRS.fuels_small$Invdate)==y,"X1FtFuel"],na.rm=TRUE)
+  mean_X1FtFuel = append(mean_X1FtFuel,m)
+}
+
+COMPLETE.fuels.overview = data.frame(year=yrs,bfrs.numplots=num_unique_plots_bfrs,bfrs.medFuel=med_X1FtFuel,bfrs.maxFuel=max_X1FtFuel,bfrs.meanFuel=mean_X1FtFuel)
+
+# Doing the same for the Additional.fuels_small
+
+#yrs = sort(unique(year(Additional.fuels_small$Invdate)))
+
+num_unique_plots_add = c()
+
+for (y in yrs){
+  l = length(unique(Additional.fuels_small[year(Additional.fuels_small$Invdate)==y,"PlotID"]))
+  num_unique_plots_add = append(num_unique_plots_add,l)
+}
+
+  
+med_X1FtFuel = c()
+
+for (y in yrs){
+  m = median(Additional.fuels_small[year(Additional.fuels_small$Invdate)==y,"X1FtFuel"],na.rm=TRUE)
+  med_X1FtFuel = append(med_X1FtFuel,m)
+}
+
+
+max_X1FtFuel = c()
+
+for (y in yrs){
+  m = max(Additional.fuels_small[year(Additional.fuels_small$Invdate)==y,"X1FtFuel"],na.rm=TRUE)
+  max_X1FtFuel = append(max_X1FtFuel,m)
+}
+
+mean_X1FtFuel = c()
+
+for (y in yrs){
+  m = mean(Additional.fuels_small[year(Additional.fuels_small$Invdate)==y,"X1FtFuel"],na.rm=TRUE)
+  mean_X1FtFuel = append(mean_X1FtFuel,m)
+}
+
+COMPLETE.fuels.overview["Add.numplots"] = num_unique_plots_add
+COMPLETE.fuels.overview["Add.med_Fuel"] = med_X1FtFuel
+COMPLETE.fuels.overview["Add.max_Fuel"] = max_X1FtFuel
+COMPLETE.fuels.overview["Add.mean_Fuel"] = mean_X1FtFuel
+
+COMPLETE.fuels.overview
+
+
+```
+
+
+The additional plot numbers are all in metric, so in years where the FFSCompsOnly numbers are similar to the Additional plot numbers, it is more likely that the FFSCompsOnly numbers are actually already in metric. If the FFScompsonly numbers are in standard, then we'd expect Additional mean/max values to be approsimately 2.54 times larger.
+
+This makes it pretty clear that 2001 is in standard but 2003 FFSCompsOnly is in metric. Re-running this analysis with only control units included supports this conclusion.
+
+Using larger numbers (fuelbed depth instead of litter or duff) clarifies things nicely. 2003 is already in metric, 1994 and 1995 appear to be in metric too.
+
+```{r}
+# Converting BFRS.fuels_small[ year != 2003,1994, 1995] to metric before joining
+#head(BFRS.fuels_small)
+
+BFRS.fuels_small[!is.element(year(BFRS.fuels_small$Invdate),c(1994,1995,2003)),"X1FtDuff"] = BFRS.fuels_small[!is.element(year(BFRS.fuels_small$Invdate),c(1994,1995,2003)),"X1FtDuff"]*2.54
+
+BFRS.fuels_small[!is.element(year(BFRS.fuels_small$Invdate),c(1994,1995,2003)),"X1FtLitter"] = BFRS.fuels_small[!is.element(year(BFRS.fuels_small$Invdate),c(1994,1995,2003)),"X1FtLitter"]*2.54
+
+BFRS.fuels_small[!is.element(year(BFRS.fuels_small$Invdate),c(1994,1995,2003)),"X3FtDuff"] = BFRS.fuels_small[!is.element(year(BFRS.fuels_small$Invdate),c(1994,1995,2003)),"X3FtDuff"]*2.54
+
+BFRS.fuels_small[!is.element(year(BFRS.fuels_small$Invdate),c(1994,1995,2003)),"X3FtLitter"] = BFRS.fuels_small[!is.element(year(BFRS.fuels_small$Invdate),c(1994,1995,2003)),"X3FtLitter"]*2.54
+
+BFRS.fuels_small[!is.element(year(BFRS.fuels_small$Invdate),c(1994,1995,2003)),"X1FtFuel"] = BFRS.fuels_small[!is.element(year(BFRS.fuels_small$Invdate),c(1994,1995,2003)),"X1FtFuel"]*2.54
+
+BFRS.fuels_small[!is.element(year(BFRS.fuels_small$Invdate),c(1994,1995,2003)),"X2FtFuel"] = BFRS.fuels_small[!is.element(year(BFRS.fuels_small$Invdate),c(1994,1995,2003)),"X2FtFuel"]*2.54
+
+BFRS.fuels_small[!is.element(year(BFRS.fuels_small$Invdate),c(1994,1995,2003)),"X3FtFuel"] = BFRS.fuels_small[!is.element(year(BFRS.fuels_small$Invdate),c(1994,1995,2003)),"X3FtFuel"]*2.54
+
+
+# the postburn 2017 measurements are already in metric
+
+
+```
+
+####Filling in 2009 and 2017 postburn measurements
+
+To speed data collection in October 2009 after the burns, data were only collected in portions of transects which had been burned. Areas without fire effects were marked on datasheets as "unburned", and per Stephens and co. we can comfortably substitute in the pre-burn values in those instances.
+
+For 1000-hour fuels, Roller's notes make clear a distinction between "unburned" and "0". However, there are instances where some measurements in a transect (e.g. the 3m duff measurements) are marked as "unburned" but others are not. Some of these instances have nonzero 1000-hour fuels, others have 0 thousand hour fuels, and others have blanks for thousand hour fuels. I'm taking Roller's aggregation table at face value: Where values are recorded for thousand-hours, they will be used exactly. Where blanks, I will use the preburn measurements. (Spot-checking against the preburn transects makes suggests the post-burn didn't do anything screwy, such as not include 1000-hour fuels which were in unburned areas of the transect while including those that had been burned.)
+
+In 2017: (From Emails December 2017): " During the burns, we talked about using an absence of charring on woody fuels as evidence that they came down as a result of the incoming storms (and thus weren't present on the plots immediately after the burn). I am under the impression that the crew did not tally unburned woody fuels when they were sitting on top of burned litter, but they would have tallied unburned fuels sitting on top of unburned litter." Ariel Thompson confirmed this, saying "Yes, we tried to reconstruct what transects would have looked like immediately post burn so unburned fuels on burned litter were not counted, but unburned on unburned were." For the 1-1000-hour fuels, I am going to take the transect data at face value, and not try to modify the 2017 postburn measurements based on the "% transect burned" data provided by the crew. I believe doing so would be fraught with error, though the un-modified fuel tallies will include some woody fuels which were deposited in between the burns and the measurements. "Post-burn" fuel loads will be somewhat over-estimated.
+
+In 2017, the crew took duff/litter measurements even if the location for the measurement was unburned. (Though these "unburned" locations were flagged in the data.) We have measurement data for unburned locations in 2017, but for the sake of consistent interpretation with the 2009 data, I have changed the "unburned" measurements to NAs, and will fill them in wih the preburn data. Scott believes this is the best course of action.
+
+However, there are alternative approaches: I could use all the measurements, which makes different years less consistent but would not include any funny residual-altering of the data for 2017. I could flag the "unburned" locations and use them to estimate the effect of accumulation between summer 2016 and winter 2017. (!!!) I only have the post-cleaning dataset for the 2003 postburn measurements, so I'm not sure whether they did the "filling-in" thing, but it seems plausible because of Scott's leadership on the project for all years.
+
+```{r}
+# 2009 postburn data
+
+head(Postburn2.fuels_small)
+
+essential_columns
+
+measurements = c("To.24Inch",'To1Inch','To3Inch','X1FtDuff','X1FtLitter','X3FtDuff','X3FtLitter')
+
+#help("setdiff")
+
+
+
+# making sure the plostburn plotID factors match upw ith the additional_fuels ones...
+
+Postburn2.fuels_small[is.na(Postburn2.fuels_small$PlotID),] # did that matching screw up any plot ids?
+
+Postburn2.fuels_small$PlotID = factor(Postburn2.fuels_small$PlotID, levels=levels(Additional.fuels_small$PlotID))
+
+Postburn2.fuels_small[is.na(Postburn2.fuels_small$PlotID),] # did that matching screw up any plot ids?
+
+# Use plotID and azimuth to match the postburn transects to the preburn transects
+filling = merge(Additional.fuels_small[year(Additional.fuels_small$Invdate)==2009,],Postburn2.fuels_small,by=c('PlotID','Azimuth'),suffixes=c('.pre','.post'))
+
+# Where there is an NA in the postburn measurements, replace it with the matching preburn measurement
+filling[is.na(filling$To.24Inch.post),'To.24Inch.post'] = filling[is.na(filling$To.24Inch.post),'To.24Inch.pre']
+
+# do this for all the measurement values
+filling[is.na(filling$To1Inch.post),'To1Inch.post'] = filling[is.na(filling$To1Inch.post),'To1Inch.pre']
+filling[is.na(filling$To3Inch.post),'To3Inch.post'] = filling[is.na(filling$To3Inch.post),'To3Inch.pre']
+
+filling[is.na(filling$X1FtDuff.post),'X1FtDuff.post'] = filling[is.na(filling$X1FtDuff.post),'X1FtDuff.pre']
+filling[is.na(filling$X1FtLitter.post),'X1FtLitter.post'] = filling[is.na(filling$X1FtLitter.post),'X1FtLitter.pre']
+filling[is.na(filling$X3FtDuff.post),'X3FtDuff.post'] = filling[is.na(filling$X3FtDuff.post),'X3FtDuff.pre']
+filling[is.na(filling$X3FtLitter.post),'X3FtLitter.post'] = filling[is.na(filling$X3FtLitter.post),'X3FtLitter.pre']
+
+head(filling)
+
+# postburn2.fuels_small.filled = just the filled test.post columns
+
+
+head(filling)
+
+postburn2.fuels_small.filled = data.frame(PlotID=filling$PlotID,
+                                          Azimuth=filling$Azimuth,
+                                          InvID=filling$InvID.post,
+                                          Invdate=filling$Invdate.post,
+                                          To.24Inch=filling$To.24Inch.post,
+                                          To1Inch=filling$To1Inch.post,
+                                          To3Inch=filling$To3Inch.post,
+                                          X1FtDuff=filling$X1FtDuff.post,
+                                          X1FtLitter=filling$X1FtLitter.post,
+                                          X3FtDuff=filling$X3FtDuff.post,
+                                          X3FtLitter=filling$X3FtLitter.post,
+                                          Source=filling$Source.post)
+
+
+head(postburn2.fuels_small.filled)
+
+
+# Repeat for the large fuels.
+
+Postburn2.fuels_large$PlotID = factor(Postburn2.fuels_large$PlotID, levels=levels(Additional.fuels_large$PlotID))
+
+Postburn2.fuels_large[is.na(Postburn2.fuels_large$PlotID),] # didnt screw up plot ids
+
+filling.large = merge(Additional.fuels_large[year(Additional.fuels_large$Invdate)==2009,],
+                      Postburn2.fuels_large, by=c('PlotID','Azimuth'), suffixes=c('.pre','.post'))
+
+head(filling.large)
+
+filling.large[is.na(filling.large$sum_d2cm_S.post),'sum_d2cm_S.post'] = filling.large[is.na(filling.large$sum_d2cm_S.post),'sum_d2cm_S.pre']
+
+filling.large[is.na(filling.large$sum_d2cm_R.post),'sum_d2cm_R.post'] = filling.large[is.na(filling.large$sum_d2cm_R.post),'sum_d2cm_R.pre']
+
+head(filling.large)
+
+postburn2.fuels_large.filled = data.frame(PlotID=filling.large$PlotID,
+                                          Azimuth=filling.large$Azimuth,
+                                          InvID=filling.large$InvID.post,
+                                          Invdate=filling.large$Invdate.post,
+                                          sum_d2cm_S=filling.large$sum_d2cm_S.post,
+                                          sum_d2cm_R=filling.large$sum_d2cm_R.post,
+                                          Source=filling.large$Source.post)
+
+
+# Join the postburn2 measurements to the Additional tables...
+test = merge(Additional.fuels_small,postburn2.fuels_small.filled, all=TRUE)
+
+length(Additional.fuels_small$InvID)+length(postburn2.fuels_small.filled$InvID)==length(test$InvID)
+
+Additional.fuels_small = test
+
+Additional.fuels_large = merge(Additional.fuels_large,postburn2.fuels_large.filled, all=TRUE)
+
+
+# 2017 postburn data
+
+head(Postburn3.fuels_small)
+
+essential_columns
+
+measurements = c("To.24Inch",'To1Inch','To3Inch','X1FtDuff','X1FtLitter','X3FtDuff','X3FtLitter')
+
+
+# making sure the plostburn plotID factors match upw ith the additional_fuels ones... I don't think this is actually necessary...
+
+
+Postburn3.fuels_small$PlotID = factor(Postburn3.fuels_small$PlotID, levels=levels(BFRS.fuels_small$PlotID))
+
+Postburn3.fuels_small[is.na(Postburn3.fuels_small$PlotID),] # didnt screw up any plot IDs
+
+# Use plotID and azimuth to match the postburn transects to the preburn transects
+filling = merge(BFRS.fuels_small[year(BFRS.fuels_small$Invdate)==2016,],Postburn3.fuels_small,by=c('PlotID','Azimuth'),suffixes=c('.pre','.post'))
+
+head(filling)
+
+# Where there is an NA in the postburn measurements, replace it with the matching preburn measurement
+filling[is.na(filling$To.24Inch.post),'To.24Inch.post'] = filling[is.na(filling$To.24Inch.post),'To.24Inch.pre']
+
+# do this for all the measurement values
+filling[is.na(filling$To1Inch.post),'To1Inch.post'] = filling[is.na(filling$To1Inch.post),'To1Inch.pre']
+filling[is.na(filling$To3Inch.post),'To3Inch.post'] = filling[is.na(filling$To3Inch.post),'To3Inch.pre']
+
+filling[is.na(filling$X1FtDuff.post),'X1FtDuff.post'] = filling[is.na(filling$X1FtDuff.post),'X1FtDuff.pre']
+filling[is.na(filling$X1FtLitter.post),'X1FtLitter.post'] = filling[is.na(filling$X1FtLitter.post),'X1FtLitter.pre']
+filling[is.na(filling$X3FtDuff.post),'X3FtDuff.post'] = filling[is.na(filling$X3FtDuff.post),'X3FtDuff.pre']
+filling[is.na(filling$X3FtLitter.post),'X3FtLitter.post'] = filling[is.na(filling$X3FtLitter.post),'X3FtLitter.pre']
+
+head(filling)
+
+# Postburn3.fuels_small.filled = just the filled test.post columns
+
+
+head(filling)
+
+Postburn3.fuels_small.filled = data.frame(PlotID=filling$PlotID,
+                                          Azimuth=filling$Azimuth,
+                                          InvID=filling$InvID.post,
+                                          Invdate=filling$Invdate.post,
+                                          To.24Inch=filling$To.24Inch.post,
+                                          To1Inch=filling$To1Inch.post,
+                                          To3Inch=filling$To3Inch.post,
+                                          X1FtDuff=filling$X1FtDuff.post,
+                                          X1FtLitter=filling$X1FtLitter.post,
+                                          X3FtDuff=filling$X3FtDuff.post,
+                                          X3FtLitter=filling$X3FtLitter.post,
+                                          Source=filling$Source.post)
+
+
+head(Postburn3.fuels_small.filled)
+
+# Join the Postburn3 measurements to the Additional tables...
+test = merge(BFRS.fuels_small,Postburn3.fuels_small.filled, all=TRUE)
+
+length(BFRS.fuels_small$InvID)+length(Postburn3.fuels_small.filled$InvID)==length(test$InvID)
+
+BFRS.fuels_small = test
+
+# Need to finish processing the BFRS.large_fuels before it's ready to match with the postburn measurements...
+
+
+```
+
+
+####QC check here
+
+```{r}
+# Problematic NAs?
+BFRS.fuels_small[!complete.cases(BFRS.fuels_small[,essential_columns]),]
+
+Additional.fuels_small[!complete.cases(Additional.fuels_small[,essential_columns]),]
+
+
+```
+
+
+Plot measurements for each value to peek at outliers?
+
+
+
+###Create COMPLETE.fuels_small
+
+Data sources were tagged on import, so we can just merge them:
+
+```{r}
+
+
+COMPLETE.fuels_small = merge(BFRS.fuels_small,Additional.fuels_small,all=TRUE)
+
+head(COMPLETE.fuels_small[is.na(COMPLETE.fuels_small$PlotID),])
+# problematic NAs?
+COMPLETE.fuels_small[!complete.cases(COMPLETE.fuels_small[,essential_columns]),]
+```
+
+####Drop the fuel depth measurements to make checking for problematic NAs easier
+
+```{r}
+head(COMPLETE.fuels_small)
+
+COMPLETE.fuels_small = COMPLETE.fuels_small[,append(essential_columns,'Source')]
+
+
+```
+
+####Add  columns for year and unit to fuels_small
+
+```{r}
+COMPLETE.fuels_small["Year"] = year(COMPLETE.fuels_small$Invdate)
+
+library(stringr)
+
+COMPLETE.fuels_small["Unit"] = as.factor(gsub('\\-.*$','',as.character(COMPLETE.fuels_small$PlotID)))
+
+```
+
+####QC Checks
+
+
+```{r}
+# table looks ok?
+head(COMPLETE.fuels_small)
+
+# problematic NAs?
+COMPLETE.fuels_small[!complete.cases(COMPLETE.fuels_small[,essential_columns]),]
+# missing invid?
+COMPLETE.fuels_small[is.na(COMPLETE.fuels_small$InvID),] #no
+
+# missing invdate?
+COMPLETE.fuels_small[is.na(COMPLETE.fuels_small$Invdate),] # no
+
+# missing azimuth?
+COMPLETE.fuels_small[is.na(COMPLETE.fuels_small$Azimuth),] # no
+
+# Fix the NA azimuth
+COMPLETE.fuels_small[COMPLETE.fuels_small$PlotID=="0590-00013",] # looks like the NA should be 147 <---old note: looks like I've already dropped a transect for 590-113 in 2001 from the BFRS table. Not worth fixing atm, as I'll be using the additional table.
+
+#COMPLETE.fuels_small[COMPLETE.fuels_small$PlotID=="0590-00013"&is.na(COMPLETE.fuels_small$Azimuth),"Azimuth"] = 147
+
+
+# Continue with QC checks
+
+# missing measurement?
+COMPLETE.fuels_small[is.na(COMPLETE.fuels_small$To.24Inch),]
+
+# complete = rows from BFRS + rows from additional?
+length(BFRS.fuels_small$InvID) + length(Additional.fuels_small$InvID) ==length(COMPLETE.fuels_small$InvID)
+
+# something other than 2 transects per year?
+noccur = data.frame(table(COMPLETE.fuels_small[,c("Year","PlotID","Source")]))
+
+tocheck = noccur[noccur$Freq!=2&noccur$Freq!=0,] # mostly (but not all) units that were measured more than once in 2001, 2002, or 2003
+
+tocheck
+
+# look closer at 190-0024 in 2003:
+
+COMPLETE.fuels_small[COMPLETE.fuels_small$PlotID=='0190-00024'&COMPLETE.fuels_small$Year==2003,]
+
+# from Moghaddas' tables, it's clear that one of the transects for the post-mastication measurement of 190-24 was incomplete (missing counts for woody fuels). It got dropped on import, leaving three good rows in 2003 (one for post-mastication, two for post-measurement). Plot 350-00010 from 2009 also only has one transect in Roller's tables. I'm assuming that the other errors are also one-offs, rather than consistent.
+
+# Missing measurements flagged by brandon: If mislabeled, rather than missing, they could show up as extra transects (likely in the same compartment) in the given timeframe
+
+
+# 0190-00005 is missing in 2009 (so is 190-00115) - if mislabele 
+tocheck[tocheck$Year==2009&tocheck$Freq!=4,] # missing, not mislabeled (EDIT: now with the postburn2 measurements, we expect 4 transects per plot in 2009 for units 60, 340, and 400. only cases without 4 are problematic)
+
+# 0060-00114 is missing a transect in the postburn measurements
+
+# 0590-00102 was missing some measurements on the 79az transect in 2009, and so that transect was dropped above. 
+
+# 0340-00115 is missing in 2009 # see above
+
+# 0380-00002 is missing in 2003 and 2009 (addressed above: it was mislabeled as 0380-00025 in those years)
+
+# 0400-00103 is missing in 2001 
+tocheck[tocheck$Year==2001,] # looks like the transects are mislabeled:
+
+COMPLETE.fuels_small[COMPLETE.fuels_small$PlotID=='0590-00013',] # see above: missing a transect for 2001 in the BFRS table, will be dropped.
+
+COMPLETE.fuels_small[COMPLETE.fuels_small$PlotID=='0190-00024',] # 190-00024 also missing a transect for 2001. Will be dropped.
+
+#COMPLETE.fuels_small[COMPLETE.fuels_small$PlotID=='0340-00103',] # note 4x transects in 2001, az 17 98 113 235 --> fixed above
+#COMPLETE.fuels_small[COMPLETE.fuels_small$PlotID=='0400-00103',] # no measurement for 2001, but Az for other years are 113 and 235 --> fixed above
+
+
+
+```
+
+###Create TRTS (transects table) by combining treepivots and small fuels
+
+####Change year column for fuels to match the correct treelist (2002 and 2017)
+
+
+There are really only tree measurements for 2001 and 2003. However, to make use of the fuels measurements for various times in 2002, I'll need to estimate the overstory for each plot in order to calculate fuel load coefficients. This is the approach Moghaddas used, and I'll use his transects calculator spreadsheet to associate measurements with treatment phase:
+
+Units | Treatment | Fuels Measurement | Associated Tree Data|Invdate range for fuels data
+------|-----------|-------------------|---------------------|----------------------------
+40,240,590|Control|Pretreatment 2001|2001|July 2001 (40, 240), June 2001 (590)
+40,240,590|Control|Posttreatment 2003|2003|June 2003 (40, 240), May 2003 (590)
+60,340,400|Burn|Pretreatment 2001|2001|July 2001 (60), July/August 2001 (340), August 2001 (400)
+**60,340,400|Burn|Post burn 2002|2003|February 2003**
+60,340,400|Burn|Post treatment 2003|2003|June 2003 (340), July 2003 (60), june/july 2003 (400)
+190,350,490|Mech|Pretreatment 2001|2001|May/June 2001 (190), June 2001 (350), May 2001 (490)
+**190,350,490|Mech|Post Harvest 2002|2001|May 2002**
+**190,350,490|Mech|Post mastication 2002|2003|April/May 2003 (190), sept 2002 (350), May 2003 (490)**
+190,350,490|Mech|Post treatment 2003| 2003|May 2003 (490), June 2003 (190, 350)
+180,380,570|BurnMech|Pretreatment 2001|2001|June/July 2001 (180), June 2001 (380, 570)
+180,**380,570|BurnMech|Post Harvest 2002|2001|May 2002 (380, 570)**
+**180,380,570|BurnMech|Post mastication 2002|2003| May 2002 (180), July 2002 (380), august/july 2002 (570)**
+180,380,570|BurnMech|Post burn 2002|2003|December 2002
+180,380,570|BurnMech|Post Treatment 2003|2003| June 2003 (180, 570), july 2003 (380)
+
+When merging in the fuels and matching on plotid/year, manually set the year column to the year of the desired treelist for the bolded subsets of data identified above. E.g., for all the fuels data from units 180, 380, or 570 in the first round of 2002 measurements, (without changing the fuels invdate) set the year column to 2001. Then they will match to the correct treelist.
+
+This operation should only apply to the data from FFS. I don't think these calls would affect BFRS plots (which should not fit into the unit/month/year restrictions given here), but to be safe I'm explicitly only going to modify the FFS plots.
+
+
+
+```{r}
+# Post-burn 2017 for burn units
+COMPLETE.fuels_small[is.element(COMPLETE.fuels_small$Unit,c("0060","0340","0400"))&
+                       COMPLETE.fuels_small$Source=="BFRS"&
+                       year(COMPLETE.fuels_small$Invdate)==2017,"Year"] = 2016 # Want to match to the 2016 treelist
+
+
+
+# Post-burn 2002 for burn units
+
+COMPLETE.fuels_small[is.element(COMPLETE.fuels_small$Unit,c("0060","0340","0400"))&
+                       COMPLETE.fuels_small$Source=="FFS"&
+                       year(COMPLETE.fuels_small$Invdate)==2003&
+                       is.element(month(COMPLETE.fuels_small$Invdate),c("2")),"Year"] = 2003 # This one is redundant, they're already labeled 2003
+
+
+# post harvest for mech units
+
+COMPLETE.fuels_small[is.element(COMPLETE.fuels_small$Unit,c("0190","0350","0490"))&
+                       COMPLETE.fuels_small$Source=="FFS"&
+                       year(COMPLETE.fuels_small$Invdate)==2002&
+                       is.element(month(COMPLETE.fuels_small$Invdate),c("5")),"Year"] = 2001
+
+# Post mastication for mech units
+
+COMPLETE.fuels_small[is.element(COMPLETE.fuels_small$Unit,c("0190","0350","0490"))&
+                       COMPLETE.fuels_small$Source=="FFS"&
+                       year(COMPLETE.fuels_small$Invdate)==2002&
+                       is.element(month(COMPLETE.fuels_small$Invdate),c(9)),"Year"] = 2003 # Only affects unit 350. 190 and 490 already have invyears for 2003 for this measurement
+
+
+
+# Post harvest for mech/burn units
+
+COMPLETE.fuels_small[is.element(COMPLETE.fuels_small$Unit,c("0180","0380","0570"))&
+                       COMPLETE.fuels_small$Source=="FFS"&
+                       year(COMPLETE.fuels_small$Invdate)==2002&
+                       is.element(month(COMPLETE.fuels_small$Invdate),c(5)),"Year"] = 2001
+
+
+
+# Post mastication for mechburn units
+
+COMPLETE.fuels_small[is.element(COMPLETE.fuels_small$Unit,c("0180"))&
+                       COMPLETE.fuels_small$Source=="FFS"&
+                       year(COMPLETE.fuels_small$Invdate)==2002&
+                       is.element(month(COMPLETE.fuels_small$Invdate),c(5)),"Year"] = 2003
+
+COMPLETE.fuels_small[is.element(COMPLETE.fuels_small$Unit,c("0380"))&
+                       COMPLETE.fuels_small$Source=="FFS"&
+                       year(COMPLETE.fuels_small$Invdate)==2002&
+                       is.element(month(COMPLETE.fuels_small$Invdate),c(7)),"Year"] = 2003
+
+COMPLETE.fuels_small[is.element(COMPLETE.fuels_small$Unit,c("0570"))&
+                       COMPLETE.fuels_small$Source=="FFS"&
+                       year(COMPLETE.fuels_small$Invdate)==2002&
+                       is.element(month(COMPLETE.fuels_small$Invdate),c(7,8)),"Year"] = 2003
+
+# post-burn  for mech/burn units
+
+
+COMPLETE.fuels_small[is.element(COMPLETE.fuels_small$Unit,c("0180","0380","0570"))&
+                       COMPLETE.fuels_small$Source=="FFS"&
+                       year(COMPLETE.fuels_small$Invdate)==2002&
+                       is.element(month(COMPLETE.fuels_small$Invdate),c(12)),"Year"] = 2003
+
+
+COMPLETE.fuels_small[COMPLETE.fuels_small$Year==2002,] # Excellent
+
+```
+
+Repeating this process for the 2009 preburn/postburn measurements isn't necessary: For each plot in units 60/340/400, there is only one treelist for 2009. Doing the merge on Plot/Year/Source (all.y=TRUE) will automatically duplicate the treelist for the postburn fuels measurements.
+
+It was necessary to do this process for 2017 postburn measurements, which have been labeled as Year=2016 to match them to 2016 treelists. There is only one treelist for 2016 plots, so doing the merge on Plot/Year/Source (all.y=TRUE) will automatically duplicate the treelist.
+
+####QC precheck: Are there actually only 2 fuels transects per InvID, and only one TreePivots row per InvID?
+
+Also need to consider that the year/month/unit/plot InvIDs are not strictly unique: There are occasional instances where plots were remeasured within weeks (e.g. in post-mastication and post-treatment). If a plot is measured twice in the same month the two measurement events (four transects) will share an InvID. This is only an issue for unit 490.
+
+
+
+```{r}
+# checking uniqueness of invids for fuels
+
+rowsperInvID = data.frame(table(BFRS.fuels_small$InvID))
+
+rowsperInvID[rowsperInvID$Freq!=2,]
+
+BFRS.fuels_small[BFRS.fuels_small$InvID==6603,] # looking at source data reveals this one is just missing a transect
+
+BFRS.fuels_small[BFRS.fuels_small$InvID==3983,] # same: missing a transect, but only in the BFRS database.
+
+# Checking one row per InvID in treePivots
+
+rowsperInvID = data.frame(table(TreePivots$InvID))
+
+rowsperInvID[rowsperInvID$Freq!=1,]
+
+# InvIDs are unique for tree pivots (As expected: I already aggregated over InvID.)
+
+# checking for unexplained accumulation of all-NA rows
+TreePivots[is.na(TreePivots),]
+# problematic NAs?
+COMPLETE.fuels_small[!complete.cases(COMPLETE.fuels_small[,essential_columns]),]
+
+```
+
+
+####Merging 
+
+```{r}
+
+
+TRTS = merge(TreePivots,COMPLETE.fuels_small,by=c("PlotID","Year","Source"),all.y=TRUE)
+
+# Cleaning up column names for readability
+
+TRTS["InvID.trees"] = TRTS$InvID.x
+TRTS["InvID.fuels"] = TRTS$InvID.y
+
+TRTS["Invdate.trees"] = TRTS$Invdate.x
+TRTS["Invdate.fuels"] = TRTS$Invdate.y
+
+drops = c("InvID.x","InvID.y","Invdate.x","Invdate.y")
+
+TRTS = TRTS[, !(names(TRTS) %in% drops)]
+
+
+```
+
+####QC Checks
+
+```{r}
+head(TRTS)
+
+TRTS[!complete.cases(TRTS),]
+
+# Missing trees data?
+
+length(TRTS[is.na(TRTS$`BA.mha.sum_(all)_(all)`),"Invdate.fuels"])
+
+sort(unique(year(TRTS[is.na(TRTS$`BA.mha.sum_(all)_(all)`),"Invdate.fuels"])))
+
+check = TRTS[is.na(TRTS$`BA.mha.sum_(all)_(all)`),] # All from 2013. Shame to drop the 2013 data but there's no associated treelists. 
+
+check[check$Year==2016,] # orphaned fuels plots from 2013. "Orphaned" plots from other years were actually just mislabeled fuels measurements, and all fixed above.
+
+# Drop all rows that are missing trees data
+
+TRTS = TRTS[!is.na(TRTS$`BA.mha.sum_(all)_(all)`),]
+
+# Rows without fuels measurements?
+
+TRTS[is.na(TRTS$To.24Inch)|is.na(TRTS$To1Inch)|is.na(TRTS$To3Inch),] # none
+
+# Rows missing date(s)?
+
+TRTS[is.na(TRTS$Invdate.fuels)|is.na(TRTS$Invdate.trees),] # none
+
+# check that BA/ha and count/ha both still look sane
+
+plot(TRTS$`count.ha_Live_(all)`~TRTS$`BA.mha.sum_Live_(all)`)
+
+mean(TRTS$`count.ha_Live_(all)`) # ~300 tph looks good against 2012 paper
+
+mean(TRTS$`BA.mha.sum_Live_(all)`) # ~50 m2/ha looks good against 2012 paper
+
+# or in standard:
+
+mean(TRTS$`count.ha_Live_(all)`)/2.47105
+
+mean(TRTS$`BA.mha.sum_Live_(all)`)*4.356
+
+# Checking InvID counts
+
+rowsperInvID = data.frame(table(TRTS$InvID.fuels))
+
+rowsperInvID[rowsperInvID$Freq!=2,]
+
+# Not really concerned about instances of only 1 transect per InvID: Those will be dropped later.
+
+rowsperInvID[rowsperInvID$Freq>2,]
+
+# They're still all measurements from may 2003 compartment 490, which was measured twice in that month. I'll wind up only using the latter ones, but will need to avoid merging on InvID until I drop the 'during treatment' measurements.
+
+
+
+```
+
+
+###Merge in fuels_large, the 1000h fuels data
+
+####Clean up BFRS.fuels_large
+```{r}
+
+head(BFRS.fuels_large)
+
+# Convert decay factors to R/S system, based on some GTR (find citation!)
+
+BFRS.fuels_large["Decay.Factor"] = as.character(BFRS.fuels_large$Decay.Factor)
+
+BFRS.fuels_large$Decay.Factor[BFRS.fuels_large$Decay.Factor=="A"]="S"
+BFRS.fuels_large$Decay.Factor[BFRS.fuels_large$Decay.Factor=="B"]="S"
+BFRS.fuels_large$Decay.Factor[BFRS.fuels_large$Decay.Factor=="C"]="R"
+BFRS.fuels_large$Decay.Factor[BFRS.fuels_large$Decay.Factor=="D"]="R"
+BFRS.fuels_large$Decay.Factor[BFRS.fuels_large$Decay.Factor=="E"]="R"
+
+# Assume decay factor X (probably missing?) is sound. This seems a safer assumption that simply dropping the measurements (though I won't wind up using BFRS fuels from 2001 anyways.)
+BFRS.fuels_large[BFRS.fuels_large$Decay.Factor=='X','Decay.Factor'] = 'S'
+
+BFRS.fuels_large["Decay.Factor"] = as.factor(BFRS.fuels_large$Decay.Factor)
+
+levels(BFRS.fuels_large$Decay.Factor)
+
+# checking units of measurement
+
+yrs = unique(year(BFRS.fuels_large$Invdate))
+
+yrs = sort(yrs)
+
+mean_diam = c()
+
+for (y in yrs){
+  m = mean(BFRS.fuels_large[year(BFRS.fuels_large$Invdate)==y,"Size"],na.rm=TRUE)
+  mean_diam = append(mean_diam,m)
+}
+
+max_diam = c()
+
+for (y in yrs){
+  m = max(BFRS.fuels_large[year(BFRS.fuels_large$Invdate)==y,"Size"],na.rm=TRUE)
+  max_diam = append(max_diam,m)
+}
+
+num_unique_plots = c()
+
+for (y in yrs){
+  l = length(unique(BFRS.fuels_large[year(BFRS.fuels_large$Invdate)==y,"PlotID"]))
+  num_unique_plots = append(num_unique_plots,l)
+}
+
+BFRS.fuels_large.overview = data.frame(Year=yrs,numplots=num_unique_plots,meandiam=mean_diam,maxdiam=max_diam)
+
+BFRS.fuels_large.overview
+```
+
+Again, 2003 is the clear outlier with the units apparently already in metric. 
+
+```{r}
+# convert all other measurements to metric:
+
+# Conversion
+BFRS.fuels_large[!is.element(year(BFRS.fuels_large$Invdate),c(2003,2017)),"Size"] = BFRS.fuels_large[!is.element(year(BFRS.fuels_large$Invdate),c(2003,2017)),"Size"]*2.54 # note that we have not yet appended the 2017 measurements, which are also already in metric
+
+# Checking
+yrs = unique(year(BFRS.fuels_large$Invdate))
+
+yrs = sort(yrs)
+
+mean_diam = c()
+
+for (y in yrs){
+  m = mean(BFRS.fuels_large[year(BFRS.fuels_large$Invdate)==y,"Size"],na.rm=TRUE)
+  mean_diam = append(mean_diam,m)
+}
+
+max_diam = c()
+
+for (y in yrs){
+  m = max(BFRS.fuels_large[year(BFRS.fuels_large$Invdate)==y,"Size"],na.rm=TRUE)
+  max_diam = append(max_diam,m)
+}
+
+num_unique_plots = c()
+
+for (y in yrs){
+  l = length(unique(BFRS.fuels_large[year(BFRS.fuels_large$Invdate)==y,"PlotID"]))
+  num_unique_plots = append(num_unique_plots,l)
+}
+
+BFRS.fuels_large.overview = data.frame(Year=yrs,numplots=num_unique_plots,meandiam=mean_diam,maxdiam=max_diam)
+
+BFRS.fuels_large.overview # measurements are now consistently in metric
+
+```
+
+
+create BFRS.fuels_large_agg by aggregating BFRS.fuels_large on decay factor, invID, azimuth, with f(x) = sum(x^2)
+
+```{r}
+
+BFRS.fuels_large_agg = aggregate(Size~Decay.Factor+Azimuth+Invdate+PlotID+InvID,data=BFRS.fuels_large,FUN=function(x){sum(x^2)})
+
+
+BFRS.fuels_large_agg["sum_d2cm"] = BFRS.fuels_large_agg$Size
+
+BFRS.fuels_large_agg = subset(BFRS.fuels_large_agg,select=c(InvID,PlotID,Invdate,Azimuth,Decay.Factor,sum_d2cm))
+
+head(BFRS.fuels_large_agg)
+
+```
+
+
+melt and recast BFRS.fuels_large_agg
+
+```{r}
+
+molten = melt(BFRS.fuels_large_agg,id.vars=c("InvID","PlotID","Invdate","Azimuth","Decay.Factor"),measure.vars="sum_d2cm")
+
+
+head(molten)
+
+BFRS.fuels_large_agg = dcast(molten,InvID+PlotID+Invdate+Azimuth~variable+Decay.Factor,fun.aggregate=sum)
+
+
+head(BFRS.fuels_large_agg)
+
+
+```
+
+#####fill in the 2017 postburn measurements
+```{r}
+#
+head(Postburn3.fuels_large)
+
+# manually filling in the two "0% burned" rows: 0340-00116 az 254 and 0400-00011 az 61 by looking at the 2016 inventory...
+
+Postburn3.fuels_large.filled = Postburn3.fuels_large
+
+# convert to cm, take sum of squares
+sscm = function(x){
+  sum((x*2.54)^2)
+}
+
+# no 340-116 az 254 rotten
+
+# 340-116 az 254 sound
+sscm(c(13))
+
+Postburn3.fuels_large.filled[Postburn3.fuels_large.filled$PlotID=='0340-00116'&Postburn3.fuels_large.filled$Azimuth=='254','sum_d2cm_R'] = 0
+Postburn3.fuels_large.filled[Postburn3.fuels_large.filled$PlotID=='0340-00116'&Postburn3.fuels_large.filled$Azimuth=='254','sum_d2cm_S'] = 1090.3
+
+COMPLETE.fuels_small[COMPLETE.fuels_small$PlotID=='0400-00011',] # there is no measurement of 400-00011 in 2016
+
+# so drop it from the fuels_large table too
+Postburn3.fuels_large.filled = Postburn3.fuels_large.filled[Postburn3.fuels_large.filled$PlotID!='0400-00011',]
+
+Postburn3.fuels_large.filled['Source'] = 'BFRS'
+
+head(Postburn3.fuels_large.filled)
+
+BFRS.fuels_large_agg = merge(BFRS.fuels_large_agg,Postburn3.fuels_large.filled, all=TRUE)
+
+head(BFRS.fuels_large_agg)
+
+```
+
+
+####Create COMPLETE.fuels_large
+
+```{r}
+# Add "source" columns for BFRS and FFS data
+
+BFRS.fuels_large_agg["Source"] = "BFRS"
+
+Additional.fuels_large["Source"] = "FFS"
+
+# Initial import QC check
+head(Additional.fuels_large)
+
+class(Additional.fuels_large$InvID)
+
+sort(unique(year(Additional.fuels_large$Invdate)))
+
+# merge
+COMPLETE.fuels_large = merge(BFRS.fuels_large_agg,Additional.fuels_large,all=TRUE)
+
+head(COMPLETE.fuels_large)
+
+
+```
+
+
+####Do QC
+
+```{r}
+# Checking that the merge didn't drop rows with no large fuels...
+
+COMPLETE.fuels_large[COMPLETE.fuels_large$sum_d2cm_R==0&COMPLETE.fuels_large$sum_d2cm_S==0,] # all good
+
+# What about from the BFRS data?
+
+COMPLETE.fuels_large[COMPLETE.fuels_large$sum_d2cm_R==0&COMPLETE.fuels_large$sum_d2cm_S==0&COMPLETE.fuels_large$Source=="BFRS",]
+
+# The merge DID drop rows with no large fuels for years other than 2017.... The way BFRS stored the data for fuels_large, it is impossible to tell the difference between a measurement not taking place (no diam entries in table) and a measurement taking place but finding no intersections (no diam entries in table). Need to include all the fuels_small data, and for anywhere with NAs in fuels_large but values in fuels_small, assume no intersections (sum_d2cm=0) rather than no measurement (sum_d2cm = NA). This will get fixed after the merge with TRTS.
+
+TRTS[!complete.cases(TRTS),]
+
+```
+
+
+
+####Merge TRTS and COMPLETE.fuels_large on InvID/Invdate/Azimuth/PlotID/Source
+
+Note 2017 december: Is the inclusion of InvID really necessary here?
+
+```{r}
+
+TRTS = merge(TRTS,COMPLETE.fuels_large,by.x=c("InvID.fuels","Invdate.fuels","Azimuth","PlotID","Source"),by.y=c("InvID","Invdate","Azimuth","PlotID","Source"),all.x=TRUE)
+
+#head(COMPLETE.fuels_large[COMPLETE.fuels_large$Source=="FFS",])
+
+# are there any FFS rows with small fuels data but NAs for large fuels?
+
+TRTS[TRTS$Source!="BFRS"&(is.na(TRTS$sum_d2cm_R)|is.na(TRTS$sum_d2cm_S)),] # yes
+
+# For plot 400-103 in 2001, I had originally dropped the extra transects (which were mislabeled as 340-103) for large fuels
+# adding those data back in from Moghaddas' spreadsheet:
+
+TRTS[TRTS$PlotID=='0400-00103'&TRTS$Year==2001&TRTS$Azimuth==235,'sum_d2cm_R'] = (14**2)+(13**2)
+TRTS[TRTS$PlotID=='0400-00103'&TRTS$Year==2001&TRTS$Azimuth==235,'sum_d2cm_S'] = 0
+TRTS[TRTS$PlotID=='0400-00103'&TRTS$Year==2001&TRTS$Azimuth==113,'sum_d2cm_R'] = 0
+TRTS[TRTS$PlotID=='0400-00103'&TRTS$Year==2001&TRTS$Azimuth==113,'sum_d2cm_S'] = 0
+
+
+TRTS[TRTS$Source!="BFRS"&(is.na(TRTS$sum_d2cm_R)|is.na(TRTS$sum_d2cm_S)),] # yes
+
+# Two of the datasheet excel files for 2010 (340-26 and 340-124) have "MISSING FUELS" in the filename.
+
+# 340-00026 is missing the 311az transect, and has clear zeroes for the 51 transect. 340-00124 has data for the 24az transect, and is missing data for the 72 az. 400-00120 is ambiguous in the datasheet (blanks instead of 0s in the large fuels area), but because it's not marked as missing fuels I'm going to trust that these are zeroes.
+
+TRTS[TRTS$Source=="FFS"&TRTS$PlotID=='0340-00026'&TRTS$Year==2010&TRTS$Azimuth==51,'sum_d2cm_S'] = 0
+TRTS[TRTS$Source=="FFS"&TRTS$PlotID=='0340-00026'&TRTS$Year==2010&TRTS$Azimuth==51,'sum_d2cm_R'] = 0
+
+TRTS[TRTS$Source=="FFS"&TRTS$PlotID=='0340-00124'&TRTS$Year==2010&TRTS$Azimuth==24,'sum_d2cm_S'] = (50**2)
+TRTS[TRTS$Source=="FFS"&TRTS$PlotID=='0340-00124'&TRTS$Year==2010&TRTS$Azimuth==24,'sum_d2cm_R'] = 0
+
+TRTS[TRTS$Source=="FFS"&TRTS$PlotID=='0400-00120'&TRTS$Year==2010,'sum_d2cm_S'] = 0
+TRTS[TRTS$Source=="FFS"&TRTS$PlotID=='0400-00120'&TRTS$Year==2010,'sum_d2cm_R'] = 0
+
+TRTS[TRTS$Source!="BFRS"&(is.na(TRTS$sum_d2cm_R)|is.na(TRTS$sum_d2cm_S)),] # additional fuels are good
+
+# Saftey dropping any remaining NAs (there aren't any currently)
+TRTS = TRTS[TRTS$Source=="BFRS"|(!is.na(TRTS$sum_d2cm_R)&!is.na(TRTS$sum_d2cm_S)),]
+
+
+# Finding BFRS rows with small fuels data, and no large fuels data
+
+TRTS[TRTS$Source=="BFRS"&is.na(TRTS$sum_d2cm_R)&is.na(TRTS$sum_d2cm_S),]  # checking indicates that all rows with an NA for R have an NA for S and vice versa - this (and experience with blodgett protocal and datasheets) suggests that NA large fuels mean 0 large fuels, rather than a lack of recording
+
+# Set BFRS NA large fuels to 0
+TRTS[TRTS$Source=="BFRS"&is.na(TRTS$sum_d2cm_R)&is.na(TRTS$sum_d2cm_S),c("sum_d2cm_R","sum_d2cm_S")] = 0
+
+#TRTS[TRTS$Source=="BFRS"&TRTS$sum_d2cm_R==0&TRTS$sum_d2cm_S==0,]  # Excellent
+
+# Any NA large fuels remaining?
+
+TRTS[is.na(TRTS$sum_d2cm_R)|is.na(TRTS$sum_d2cm_S),] # no
+
+TRTS[is.na(TRTS$PlotID),] # no NA plots
+
+TRTS[round(TRTS$`pBA_(all)_(all)`,0)!=1,] # basal areas added up correctly
+
+TRTS[!complete.cases(TRTS),]
+
+```
+
+
+
+###Incorporate slope data 
+
+Brown's method for calculating fuel loads includes a correction factor *c*, to correct for the influence of plot slope on the horizontal transect length. We also have slope data for each plot (including FFS-only plots) from the BFRS database. *However...*
+
+After speaking with Brandon, I've decided to avoid using the slope correction for the moment. The slope correction factor is to correct *transect* slopes, and I only have plot slopes. It is probably possible to use the plot slope, plot aspect, and transect azimuth to approximate the transect slope, but I worry that doing so would reduce precision rather than increase it.
+
+Not correcting for slope (or correcting for slope incorrectly) will consistently cause some plots to be underestimated slightly (if slp_c set to 1 for all) or just off slightly (if "slope" != real transect slope). Because the transects were consistent across time, *whatever bias the slope introduces will remain consistent across all measurements for a plot, and the effect of slope on measurements will be baked into the effect of plot.* 
+
+Slopes range from 0-50% for BFRS plots, with a resulting slp_c range from 1 to 1.12. As of version 4, I am still just setting all slope correction factors to one, and the effect of slope on calculations will be included in the plot effects.
+
+```{r}
+hist(BFRS.plots$Slope)
+
+TRTS['slp_c'] = 1
+
+```
+
+##Generate Fuel Load Estimates
+
+###Generate fuels coefficients
+
+Generate coefficients using the pBA_species columns and crosswalking with the van wagtendonk tables.
+
+*As of version 3, I'm not using the pBA_species_(all) (that is, including both live and dead BA) rather than the pBA_species_live.* This (I think) matches up with what Moghaddas and Roller did, and in any case it makes sense.
+
+####Input data QC time
+
+This would be a good place to check for columns missing important info
+
+####Create the pBA_species_(all) columns
+
+There wasn't an easy way to do this with reshape2, so I'm going to have to do it by hand. This is where I'll place the fork for calculating fuel coefficients either based on plot overstory or on unit overstory
+
+
+```{r}
+
+# by unit version
+
+
+
+pba.units = subset(TRTS,select=c("Source","Unit","Year","BA.mha.sum_(all)_(all)",
+                                 "BA.mha.sum_Live_ABCO","BA.mha.sum_Snag_ABCO",
+                                 "BA.mha.sum_Live_CADE","BA.mha.sum_Snag_CADE",
+                                 "BA.mha.sum_Live_LIDE","BA.mha.sum_Snag_LIDE",
+                                 "BA.mha.sum_Live_PILA","BA.mha.sum_Snag_PILA",
+                                 "BA.mha.sum_Live_PIPO","BA.mha.sum_Snag_PIPO",
+                                 "BA.mha.sum_Live_PSME","BA.mha.sum_Snag_PSME",
+                                 "BA.mha.sum_Live_QUKE","BA.mha.sum_Snag_QUKE",
+                                 "BA.mha.sum_Live_OTHER","BA.mha.sum_Snag_OTHER"))
+  
+
+
+pba.units = aggregate(.~Source+Unit+Year,data=pba.units,FUN=mean)
+
+
+
+pba.units["pBA_ABCO_(all)"] = (pba.units$BA.mha.sum_Live_ABCO+pba.units$BA.mha.sum_Snag_ABCO)/pba.units$`BA.mha.sum_(all)_(all)`
+pba.units["pBA_CADE_(all)"] = (pba.units$BA.mha.sum_Live_CADE+pba.units$BA.mha.sum_Snag_CADE)/pba.units$`BA.mha.sum_(all)_(all)`
+pba.units["pBA_LIDE_(all)"] = (pba.units$BA.mha.sum_Live_LIDE+pba.units$BA.mha.sum_Snag_LIDE)/pba.units$`BA.mha.sum_(all)_(all)`
+pba.units["pBA_OTHER_(all)"] = (pba.units$BA.mha.sum_Live_OTHER+pba.units$BA.mha.sum_Snag_OTHER)/pba.units$`BA.mha.sum_(all)_(all)`
+pba.units["pBA_PILA_(all)"] = (pba.units$BA.mha.sum_Live_PILA+pba.units$BA.mha.sum_Snag_PILA)/pba.units$`BA.mha.sum_(all)_(all)`
+pba.units["pBA_PIPO_(all)"] = (pba.units$BA.mha.sum_Live_PIPO+pba.units$BA.mha.sum_Snag_PIPO)/pba.units$`BA.mha.sum_(all)_(all)`
+pba.units["pBA_PSME_(all)"] = (pba.units$BA.mha.sum_Live_PSME+pba.units$BA.mha.sum_Snag_PSME)/pba.units$`BA.mha.sum_(all)_(all)`
+pba.units["pBA_QUKE_(all)"] = (pba.units$BA.mha.sum_Live_QUKE+pba.units$BA.mha.sum_Snag_QUKE)/pba.units$`BA.mha.sum_(all)_(all)`
+pba.units["pBA_(all)_(all)"] = pba.units$`pBA_ABCO_(all)`+pba.units$`pBA_CADE_(all)`+pba.units$`pBA_LIDE_(all)`+
+  pba.units$`pBA_OTHER_(all)`+pba.units$`pBA_PILA_(all)`+pba.units$`pBA_PIPO_(all)`+pba.units$`pBA_PSME_(all)`+pba.units$`pBA_QUKE_(all)`
+
+
+head(pba.units)
+
+pba.units = subset(pba.units,select=c("Source","Unit","Year","pBA_ABCO_(all)","pBA_CADE_(all)","pBA_LIDE_(all)","pBA_OTHER_(all)","pBA_PILA_(all)","pBA_PIPO_(all)","pBA_PSME_(all)","pBA_QUKE_(all)"))
+
+```
+
+####Use plot or unit overstory composition for coefficients? switch is here
+
+In version three, I used by unit overstories, in version 4+ I'm using plot overstories for the main TRTS, but am going to enable a fork of the unit-based version.
+
+```{r}
+# To use by-plot overstories, just comment out this line:
+
+#TRTS = merge(TRTS,pba.units,by=c("Source","Unit","Year"),all.y=TRUE)
+# by-units fork
+units_TRTS = merge(TRTS,pba.units,by=c("Source","Unit","Year"),all.y=TRUE)
+
+# And uncomment these lines:
+# 
+TRTS["pBA_ABCO_(all)"] = TRTS$pBA_Live_ABCO+TRTS$pBA_Snag_ABCO
+TRTS["pBA_CADE_(all)"] = TRTS$pBA_Live_CADE+TRTS$pBA_Snag_CADE
+TRTS["pBA_LIDE_(all)"] = TRTS$pBA_Live_LIDE+TRTS$pBA_Snag_LIDE
+TRTS["pBA_OTHER_(all)"] = TRTS$pBA_Live_OTHER+TRTS$pBA_Snag_OTHER
+TRTS["pBA_PILA_(all)"] = TRTS$pBA_Live_PILA+TRTS$pBA_Snag_PILA
+TRTS["pBA_PIPO_(all)"] = TRTS$pBA_Live_PIPO+TRTS$pBA_Snag_PIPO
+TRTS["pBA_PSME_(all)"] = TRTS$pBA_Live_PSME+TRTS$pBA_Snag_PSME
+TRTS["pBA_QUKE_(all)"] = TRTS$pBA_Live_QUKE+TRTS$pBA_Snag_QUKE
+
+
+
+```
+
+####QC
+
+```{r}
+head(TRTS)
+
+TRTS[is.na(TRTS$`pBA_ABCO_(all)`),]
+
+head(units_TRTS)
+
+units_TRTS[is.na(units_TRTS$`pBA_ABCO_(all)`),]
+
+TRTS[!complete.cases(TRTS),]
+
+```
+
+
+####Litter and Duff coefficients
+
+The litter coefficient for the transect is a depth/weight coefficient from van wagtendonk 1998, average weighted by propBA species
+
+LitterCoeff = [sum(pBA*coeff) for species in the table] + [sum(pBA)*coeff for other spp] 
+
+```{r} 
+litterduff_coeffs
+
+TRTS$`pBA_ABCO_(all)`
+
+head(TRTS)
+
+TRTS["LitterCoeff"] = 
+  # Specific 1:1 matches between TRTS spp and VW table spp
+  TRTS$`pBA_ABCO_(all)`*litterduff_coeffs[litterduff_coeffs$species=="White fir","litter_coeff"]+
+  TRTS$`pBA_CADE_(all)`*litterduff_coeffs[litterduff_coeffs$species=="Incense-cedar","litter_coeff"]+
+  TRTS$`pBA_PILA_(all)`*litterduff_coeffs[litterduff_coeffs$species=="Sugar pine","litter_coeff"]+
+  TRTS$`pBA_PIPO_(all)`*litterduff_coeffs[litterduff_coeffs$species=="Ponderosa pine","litter_coeff"]+
+  TRTS$`pBA_PSME_(all)`*litterduff_coeffs[litterduff_coeffs$species=="Douglas-fir","litter_coeff"]+
+  
+  #Both oaks match to SN conifer average (questionable)
+  TRTS$`pBA_QUKE_(all)`*litterduff_coeffs[litterduff_coeffs$species=="All species","litter_coeff"]+
+  TRTS$`pBA_LIDE_(all)`*litterduff_coeffs[litterduff_coeffs$species=="All species","litter_coeff"]+
+  
+  #Other spp match to SN conifer average (questionable, but without better coefficients this is the best option)
+  TRTS$`pBA_OTHER_(all)`*litterduff_coeffs[litterduff_coeffs$species=="All species","litter_coeff"]
+
+
+
+TRTS["DuffCoeff"] = 
+  # Specific 1:1 matches between TRTS spp and VW table spp
+  TRTS$`pBA_ABCO_(all)`*litterduff_coeffs[litterduff_coeffs$species=="White fir","duff_coeff"]+
+  TRTS$`pBA_CADE_(all)`*litterduff_coeffs[litterduff_coeffs$species=="Incense-cedar","duff_coeff"]+
+  TRTS$`pBA_PILA_(all)`*litterduff_coeffs[litterduff_coeffs$species=="Sugar pine","duff_coeff"]+
+  TRTS$`pBA_PIPO_(all)`*litterduff_coeffs[litterduff_coeffs$species=="Ponderosa pine","duff_coeff"]+
+  TRTS$`pBA_PSME_(all)`*litterduff_coeffs[litterduff_coeffs$species=="Douglas-fir","duff_coeff"]+
+  
+  #Both oaks match to SN conifer average (questionable)
+  TRTS$`pBA_QUKE_(all)`*litterduff_coeffs[litterduff_coeffs$species=="All species","duff_coeff"]+
+  TRTS$`pBA_LIDE_(all)`*litterduff_coeffs[litterduff_coeffs$species=="All species","duff_coeff"]+
+  
+  #Other spp match to SN conifer average (questionable, but without better coefficients this is the best option)
+  TRTS$`pBA_OTHER_(all)`*litterduff_coeffs[litterduff_coeffs$species=="All species","duff_coeff"]
+
+
+TRTS["LitterDuffCoeff"] = 
+  # Specific 1:1 matches between TRTS spp and VW table spp
+  TRTS$`pBA_ABCO_(all)`*litterduff_coeffs[litterduff_coeffs$species=="White fir","litterduff_coeff"]+
+  TRTS$`pBA_CADE_(all)`*litterduff_coeffs[litterduff_coeffs$species=="Incense-cedar","litterduff_coeff"]+
+  TRTS$`pBA_PILA_(all)`*litterduff_coeffs[litterduff_coeffs$species=="Sugar pine","litterduff_coeff"]+
+  TRTS$`pBA_PIPO_(all)`*litterduff_coeffs[litterduff_coeffs$species=="Ponderosa pine","litterduff_coeff"]+
+  TRTS$`pBA_PSME_(all)`*litterduff_coeffs[litterduff_coeffs$species=="Douglas-fir","litterduff_coeff"]+
+  
+  #Both oaks match to SN conifer average (questionable)
+  TRTS$`pBA_QUKE_(all)`*litterduff_coeffs[litterduff_coeffs$species=="All species","litterduff_coeff"]+
+  TRTS$`pBA_LIDE_(all)`*litterduff_coeffs[litterduff_coeffs$species=="All species","litterduff_coeff"]+
+  
+  #Other spp match to SN conifer average (questionable, but without better coefficients this is the best option)
+  TRTS$`pBA_OTHER_(all)`*litterduff_coeffs[litterduff_coeffs$species=="All species","litterduff_coeff"]
+
+
+```
+
+QC time: Any new NAs?
+
+```{r}
+
+head(TRTS)
+
+
+TRTS[!complete.cases(TRTS),]
+
+```
+
+
+####1-100 hour fuel coefficients
+
+
+
+```{r}
+head(QMDcm)
+
+TRTS["x1h_coeff"] = 
+  ((
+    #QMD
+      # Specific 1:1 matches
+    TRTS$`pBA_ABCO_(all)`*QMDcm[QMDcm$species=="Abies concolor","x1h"]+
+    TRTS$`pBA_CADE_(all)`*QMDcm[QMDcm$species=="Calocedrus decurrens","x1h"]+
+    TRTS$`pBA_PILA_(all)`*QMDcm[QMDcm$species=="Pinus lambertiana","x1h"]+
+    TRTS$`pBA_PIPO_(all)`*QMDcm[QMDcm$species=="Pinus ponderosa","x1h"]+
+    TRTS$`pBA_PSME_(all)`*QMDcm[QMDcm$species=="Pseudotsuga menziesii","x1h"]+
+      # Oaks
+    TRTS$`pBA_QUKE_(all)`*QMDcm[QMDcm$species=="All Species","x1h"]+
+    TRTS$`pBA_LIDE_(all)`*QMDcm[QMDcm$species=="All Species","x1h"]+
+      # Other trees
+    TRTS$`pBA_OTHER_(all)`*QMDcm[QMDcm$species=="All Species","x1h"])*
+     
+    #SEC
+      # Specific 1:1 matches
+    (TRTS$`pBA_ABCO_(all)`*SEC[SEC$species=="Abies concolor","x1h"]+
+    TRTS$`pBA_CADE_(all)`*SEC[SEC$species=="Calocedrus decurrens","x1h"]+
+    TRTS$`pBA_PILA_(all)`*SEC[SEC$species=="Pinus lambertiana","x1h"]+
+    TRTS$`pBA_PIPO_(all)`*SEC[SEC$species=="Pinus ponderosa","x1h"]+
+    TRTS$`pBA_PSME_(all)`*SEC[SEC$species=="Pseudotsuga menziesii","x1h"]+
+      # Oaks
+    TRTS$`pBA_QUKE_(all)`*SEC[SEC$species=="All Species","x1h"]+
+    TRTS$`pBA_LIDE_(all)`*SEC[SEC$species=="All Species","x1h"]+
+      # Other trees
+    TRTS$`pBA_OTHER_(all)`*SEC[SEC$species=="All Species","x1h"])*
+  
+    #SG
+        # Specific 1:1 matches
+    (TRTS$`pBA_ABCO_(all)`*SG[SG$species=="Abies concolor","x1h"]+
+    TRTS$`pBA_CADE_(all)`*SG[SG$species=="Calocedrus decurrens","x1h"]+
+    TRTS$`pBA_PILA_(all)`*SG[SG$species=="Pinus lambertiana","x1h"]+
+    TRTS$`pBA_PIPO_(all)`*SG[SG$species=="Pinus ponderosa","x1h"]+
+    TRTS$`pBA_PSME_(all)`*SG[SG$species=="Pseudotsuga menziesii","x1h"]+
+      # Oaks
+    TRTS$`pBA_QUKE_(all)`*SG[SG$species=="All Species","x1h"]+
+    TRTS$`pBA_LIDE_(all)`*SG[SG$species=="All Species","x1h"]+
+      # Other trees
+    TRTS$`pBA_OTHER_(all)`*SG[SG$species=="All Species","x1h"])
+    )
+
+TRTS["x10h_coeff"] = 
+  ((
+    #QMD
+      # Specific 1:1 matches
+    TRTS$`pBA_ABCO_(all)`*QMDcm[QMDcm$species=="Abies concolor","x10h"]+
+    TRTS$`pBA_CADE_(all)`*QMDcm[QMDcm$species=="Calocedrus decurrens","x10h"]+
+    TRTS$`pBA_PILA_(all)`*QMDcm[QMDcm$species=="Pinus lambertiana","x10h"]+
+    TRTS$`pBA_PIPO_(all)`*QMDcm[QMDcm$species=="Pinus ponderosa","x10h"]+
+    TRTS$`pBA_PSME_(all)`*QMDcm[QMDcm$species=="Pseudotsuga menziesii","x10h"]+
+      # Oaks
+    TRTS$`pBA_QUKE_(all)`*QMDcm[QMDcm$species=="All Species","x10h"]+
+    TRTS$`pBA_LIDE_(all)`*QMDcm[QMDcm$species=="All Species","x10h"]+
+      # Other trees
+    TRTS$`pBA_OTHER_(all)`*QMDcm[QMDcm$species=="All Species","x10h"])*
+     
+    #SEC
+      # Specific 1:1 matches
+    (TRTS$`pBA_ABCO_(all)`*SEC[SEC$species=="Abies concolor","x10h"]+
+    TRTS$`pBA_CADE_(all)`*SEC[SEC$species=="Calocedrus decurrens","x10h"]+
+    TRTS$`pBA_PILA_(all)`*SEC[SEC$species=="Pinus lambertiana","x10h"]+
+    TRTS$`pBA_PIPO_(all)`*SEC[SEC$species=="Pinus ponderosa","x10h"]+
+    TRTS$`pBA_PSME_(all)`*SEC[SEC$species=="Pseudotsuga menziesii","x10h"]+
+      # Oaks
+    TRTS$`pBA_QUKE_(all)`*SEC[SEC$species=="All Species","x10h"]+
+    TRTS$`pBA_LIDE_(all)`*SEC[SEC$species=="All Species","x10h"]+
+      # Other trees
+    TRTS$`pBA_OTHER_(all)`*SEC[SEC$species=="All Species","x10h"])*
+  
+    #SG
+        # Specific 1:1 matches
+    (TRTS$`pBA_ABCO_(all)`*SG[SG$species=="Abies concolor","x10h"]+
+    TRTS$`pBA_CADE_(all)`*SG[SG$species=="Calocedrus decurrens","x10h"]+
+    TRTS$`pBA_PILA_(all)`*SG[SG$species=="Pinus lambertiana","x10h"]+
+    TRTS$`pBA_PIPO_(all)`*SG[SG$species=="Pinus ponderosa","x10h"]+
+    TRTS$`pBA_PSME_(all)`*SG[SG$species=="Pseudotsuga menziesii","x10h"]+
+      # Oaks
+    TRTS$`pBA_QUKE_(all)`*SG[SG$species=="All Species","x10h"]+
+    TRTS$`pBA_LIDE_(all)`*SG[SG$species=="All Species","x10h"]+
+      # Other trees
+    TRTS$`pBA_OTHER_(all)`*SG[SG$species=="All Species","x10h"])
+    )
+
+TRTS["x100h_coeff"] = 
+  ((
+    #QMD
+      # Specific 1:1 matches
+    TRTS$`pBA_ABCO_(all)`*QMDcm[QMDcm$species=="Abies concolor","x100h"]+
+    TRTS$`pBA_CADE_(all)`*QMDcm[QMDcm$species=="Calocedrus decurrens","x100h"]+
+    TRTS$`pBA_PILA_(all)`*QMDcm[QMDcm$species=="Pinus lambertiana","x100h"]+
+    TRTS$`pBA_PIPO_(all)`*QMDcm[QMDcm$species=="Pinus ponderosa","x100h"]+
+    TRTS$`pBA_PSME_(all)`*QMDcm[QMDcm$species=="Pseudotsuga menziesii","x100h"]+
+      # Oaks
+    TRTS$`pBA_QUKE_(all)`*QMDcm[QMDcm$species=="All Species","x100h"]+
+    TRTS$`pBA_LIDE_(all)`*QMDcm[QMDcm$species=="All Species","x100h"]+
+      # Other trees
+    TRTS$`pBA_OTHER_(all)`*QMDcm[QMDcm$species=="All Species","x100h"])*
+     
+    #SEC
+      # Specific 1:1 matches
+    (TRTS$`pBA_ABCO_(all)`*SEC[SEC$species=="Abies concolor","x100h"]+
+    TRTS$`pBA_CADE_(all)`*SEC[SEC$species=="Calocedrus decurrens","x100h"]+
+    TRTS$`pBA_PILA_(all)`*SEC[SEC$species=="Pinus lambertiana","x100h"]+
+    TRTS$`pBA_PIPO_(all)`*SEC[SEC$species=="Pinus ponderosa","x100h"]+
+    TRTS$`pBA_PSME_(all)`*SEC[SEC$species=="Pseudotsuga menziesii","x100h"]+
+      # Oaks
+    TRTS$`pBA_QUKE_(all)`*SEC[SEC$species=="All Species","x100h"]+
+    TRTS$`pBA_LIDE_(all)`*SEC[SEC$species=="All Species","x100h"]+
+      # Other trees
+    TRTS$`pBA_OTHER_(all)`*SEC[SEC$species=="All Species","x100h"])*
+  
+    #SG
+        # Specific 1:1 matches
+    (TRTS$`pBA_ABCO_(all)`*SG[SG$species=="Abies concolor","x100h"]+
+    TRTS$`pBA_CADE_(all)`*SG[SG$species=="Calocedrus decurrens","x100h"]+
+    TRTS$`pBA_PILA_(all)`*SG[SG$species=="Pinus lambertiana","x100h"]+
+    TRTS$`pBA_PIPO_(all)`*SG[SG$species=="Pinus ponderosa","x100h"]+
+    TRTS$`pBA_PSME_(all)`*SG[SG$species=="Pseudotsuga menziesii","x100h"]+
+      # Oaks
+    TRTS$`pBA_QUKE_(all)`*SG[SG$species=="All Species","x100h"]+
+    TRTS$`pBA_LIDE_(all)`*SG[SG$species=="All Species","x100h"]+
+      # Other trees
+    TRTS$`pBA_OTHER_(all)`*SG[SG$species=="All Species","x100h"])
+    )
+
+# QC
+
+head(TRTS)
+
+# Any NA results?
+TRTS[is.na(TRTS$x100h_coeff)|is.na(TRTS$x10h_coeff)|is.na(TRTS$x1h_coeff),]
+
+```
+
+
+
+####1000-hour coefficients
+
+```{r}
+head(SEC)
+
+
+# 1000h sound coefficients
+
+TRTS["x1000s_coeff"] = 
+  (
+     #SEC
+      # Specific 1:1 matches
+    (TRTS$`pBA_ABCO_(all)`*SEC[SEC$species=="Abies concolor","x1000h"]+
+    TRTS$`pBA_CADE_(all)`*SEC[SEC$species=="Calocedrus decurrens","x1000h"]+
+    TRTS$`pBA_PILA_(all)`*SEC[SEC$species=="Pinus lambertiana","x1000h"]+
+    TRTS$`pBA_PIPO_(all)`*SEC[SEC$species=="Pinus ponderosa","x1000h"]+
+    TRTS$`pBA_PSME_(all)`*SEC[SEC$species=="Pseudotsuga menziesii","x1000h"]+
+      # Oaks
+    TRTS$`pBA_QUKE_(all)`*SEC[SEC$species=="All Species","x1000h"]+
+    TRTS$`pBA_LIDE_(all)`*SEC[SEC$species=="All Species","x1000h"]+
+      # Other trees
+    TRTS$`pBA_OTHER_(all)`*SEC[SEC$species=="All Species","x1000h"])*
+  
+    #SG
+        # Specific 1:1 matches
+    (TRTS$`pBA_ABCO_(all)`*SG[SG$species=="Abies concolor","x1000s"]+
+    TRTS$`pBA_CADE_(all)`*SG[SG$species=="Calocedrus decurrens","x1000s"]+
+    TRTS$`pBA_PILA_(all)`*SG[SG$species=="Pinus lambertiana","x1000s"]+
+    TRTS$`pBA_PIPO_(all)`*SG[SG$species=="Pinus ponderosa","x1000s"]+
+    TRTS$`pBA_PSME_(all)`*SG[SG$species=="Pseudotsuga menziesii","x1000s"]+
+      # Oaks
+    TRTS$`pBA_QUKE_(all)`*SG[SG$species=="All Species","x1000s"]+
+    TRTS$`pBA_LIDE_(all)`*SG[SG$species=="All Species","x1000s"]+
+      # Other trees
+    TRTS$`pBA_OTHER_(all)`*SG[SG$species=="All Species","x1000s"])
+    )
+
+
+
+
+# 1000h rotten. SG doesn't vary by species, but column added for consistency and modulatirty. Versions <5 have a small error here, and use the all species average SEC for rotten 1000-hour fuels.
+
+TRTS["x1000r_coeff"] = vw96_sg_1000r*(
+       #SEC
+      # Specific 1:1 matches
+    (TRTS$`pBA_ABCO_(all)`*SEC[SEC$species=="Abies concolor","x1000h"]+
+    TRTS$`pBA_CADE_(all)`*SEC[SEC$species=="Calocedrus decurrens","x1000h"]+
+    TRTS$`pBA_PILA_(all)`*SEC[SEC$species=="Pinus lambertiana","x1000h"]+
+    TRTS$`pBA_PIPO_(all)`*SEC[SEC$species=="Pinus ponderosa","x1000h"]+
+    TRTS$`pBA_PSME_(all)`*SEC[SEC$species=="Pseudotsuga menziesii","x1000h"]+
+      # Oaks
+    TRTS$`pBA_QUKE_(all)`*SEC[SEC$species=="All Species","x1000h"]+
+    TRTS$`pBA_LIDE_(all)`*SEC[SEC$species=="All Species","x1000h"]+
+      # Other trees
+    TRTS$`pBA_OTHER_(all)`*SEC[SEC$species=="All Species","x1000h"])
+)
+
+# QC
+head(TRTS)
+
+
+TRTS[is.na(TRTS$x1000r_coeff)|is.na(TRTS$x1000s_coeff),]
+
+TRTS[!complete.cases(TRTS),]
+
+```
+
+
+
+###Calculate actual weight estimates
+
+####Incorporate transect length data
+
+Based on data source files (where available), Ariel's email, and literature published using the data:
+
+Year | 1h transect length | 10h transect length | 100h transect length | 1000h transect length
+
+2001|1.83m|1.83m|3.05m|11.34m
+2002|1.83m|1.83m|3.05m|11.34m or 9.144m
+2003|1.83m|1.83m|3.05m|11.34m or 9.144m
+2009|1.83m|1.83m|3.05m|11.3m
+2010|1.83m|1.83m|3.05m|11.3m
+2017|1.83m|1.83m|3.05m|11.3m
+
+Roller's spreadsheet uses 2m / 2m / 3m / 11.3m for 2009, and all of the data sheets for 2009 have units in metric, which suggests that they actually did use metric transect lengths. Roller was on the crew collecting the data in 2009 - presumably if both the datasheets and his spreadsheet agree that the actual transect lengths were 2 / 2 / 3 / 11.3, then that's what they were while measuring.
+
+The 2010 data sheets also suggest metric transect lengths. (i.e. 2/ 2/ 3/ 11.3)
+
+Units/timings where the 1000h transect length is 9.144m instead of 11.34 (as indicated in Moghaddas' spreadsheet):
+
+Units 190, 350, 380, 490, 570, post harvest (may 2002) (note unit 180 not measured post-harvest)
+
+Units 180, 350, 380, 570, post mastication (may 2002, sept 2002, july 2002, july/aug 2002)
+
+Units 190, 490, post masticatino (may 2003)
+
+Units 60, 340, 400, post burn (feb 2003, "post burn 2002" measurements from december 2002 are 11.34m)
+
+Bolded sets should have 1000h transect set to 9.144m:
+
+Units | Treatment | Fuels Measurement | Associated Tree Data|Invdate range for fuels data
+------|-----------|-------------------|---------------------|----------------------------
+40,240,590|Control|Pretreatment 2001|2001|July 2001 (40, 240), June 2001 (590)
+40,240,590|Control|Posttreatment 2003|2003|June 2003 (40, 240), May 2003 (590)
+60,340,400|Burn|Pretreatment 2001|2001|July 2001 (60), July/August 2001 (340), August 2001 (400)
+**60,340,400|Burn|Post burn 2002|2003|February 2003**
+60,340,400|Burn|Post treatment 2003|2003|June 2003 (340), July 2003 (60), june/july 2003 (400)
+190,350,490|Mech|Pretreatment 2001|2001|May/June 2001 (190), June 2001 (350), May 2001 (490)
+**190,350,490|Mech|Post Harvest 2002|2001|May 2002**
+**190,350,490|Mech|Post mastication 2002|2003|April/May 2003 (190), sept 2002 (350), May 2003 (490)**
+190,350,490|Mech|Post treatment 2003| 2003|May 2003 (490), June 2003 (190, 350)
+180,380,570|BurnMech|Pretreatment 2001|2001|June/July 2001 (180), June 2001 (380, 570)
+180,**380,570|BurnMech|Post Harvest 2002|2001|May 2002 (380, 570)**
+**180,380,570|BurnMech|Post mastication 2002|2003| May 2002 (180), July 2002 (380), august/july 2002 (570)**
+180,380,570|BurnMech|Post burn 2002|2003|December 2002
+180,380,570|BurnMech|Post Treatment 2003|2003| June 2003 (180, 570), july 2003 (380)
+
+
+```{r}
+
+# By default, I'm assuming 1.83m, 1.83m, 3.05m, and 11.34m. This is the BFRS standard, and was used in 2001 and 2003 for the FFS plots too
+
+TRTS["x1h_L"] = 1.83
+
+TRTS["x10h_L"] = 1.83
+  
+TRTS["x100h_L"] = 3.05
+  
+TRTS["x1000h_L"] = 11.34
+
+# Setting certain measurements' 1000h transect length to 9.144, per Moghaddas' spreadsheet as recorded in the above table
+
+TRTS[TRTS$Source=="FFS"&
+     is.element(TRTS$Unit,c("0060,0340,0400"))&
+     year(TRTS$Invdate.fuels)==2003&
+     month(TRTS$Invdate.fuels)==2,
+     "x1000h_L"] = 9.144
+        
+TRTS[TRTS$Source=="FFS"&
+     is.element(TRTS$Unit,c("0190","0350","0490"))&
+     year(TRTS$Invdate.fuels)==2002&
+     month(TRTS$Invdate.fuels)==5,
+     "x1000h_L"] = 9.144
+
+TRTS[TRTS$Source=="FFS"&
+     is.element(TRTS$Unit,c("0190"))&
+     year(TRTS$Invdate.fuels)==2003&
+     is.element(month(TRTS$Invdate.fuels),c(4,5)),
+     "x1000h_L"] = 9.144
+
+TRTS[TRTS$Source=="FFS"&
+     is.element(TRTS$Unit,c("0350"))&
+     year(TRTS$Invdate.fuels)==2002&
+     month(TRTS$Invdate.fuels)==9,
+     "x1000h_L"] = 9.144
+
+# Unit 490 was measured twice in may 2003, with different transect lengths. We want only the first round, from the first week of may 2003:
+TRTS[TRTS$Source=="FFS"&
+     is.element(TRTS$Unit,c("0490"))&
+     year(TRTS$Invdate.fuels)==2003&
+     month(TRTS$Invdate.fuels)==5&
+     day(TRTS$Invdate.fuels)<15,
+     "x1000h_L"] = 9.144
+
+
+TRTS[TRTS$Source=="FFS"&
+     is.element(TRTS$Unit,c("380","570"))&
+     year(TRTS$Invdate.fuels)==2002&
+     month(TRTS$Invdate.fuels)==5,
+     "x1000h_L"] = 9.144
+
+
+TRTS[TRTS$Source=="FFS"&
+     is.element(TRTS$Unit,c("0180"))&
+     year(TRTS$Invdate.fuels)==2002&
+     month(TRTS$Invdate.fuels)==5,
+     "x1000h_L"] = 9.144
+
+
+TRTS[TRTS$Source=="FFS"&
+     is.element(TRTS$Unit,c("0380"))&
+     year(TRTS$Invdate.fuels)==2002&
+     month(TRTS$Invdate.fuels)==7,
+     "x1000h_L"] = 9.144
+
+
+TRTS[TRTS$Source=="FFS"&
+     is.element(TRTS$Unit,c("0570"))&
+     year(TRTS$Invdate.fuels)==2002&
+     is.element(month(TRTS$Invdate.fuels),c(7,8)),
+     "x1000h_L"] = 9.144
+
+
+# For 2009 and 2010 FFS measurements, set transect lengths to 2m, 2m, etc. system per above
+
+TRTS[TRTS$Source=="FFS"&
+     is.element(year(TRTS$Invdate.fuels),c(2009,2010)),
+     "x1h_L"] = 2 
+
+TRTS[TRTS$Source=="FFS"&
+     is.element(year(TRTS$Invdate.fuels),c(2009,2010)),
+     "x10h_L"] = 2 
+
+TRTS[TRTS$Source=="FFS"&
+     is.element(year(TRTS$Invdate.fuels),c(2009,2010)),
+     "x100h_L"] = 3 
+
+TRTS[TRTS$Source=="FFS"&
+     is.element(year(TRTS$Invdate.fuels),c(2009,2010)),
+     "x1000h_L"] = 11.3 
+
+```
+
+####Calculate fuel load using coefficients, measurements, and k-values
+
+I'm making the decision here to average the measured litter/duff/litter+duff depths together (there are two depths for each per transect), and then calculate a single litter/duff/litter+duff load for the entire transect.
+
+```{r}
+# Generating actual weight estimates 
+
+# Litter, Duff, and Litter/duff
+# W = depth(cm) * coeff * 10 (to convert from kg/m2 to mtons/ha)
+
+
+TRTS["fuelload_litter_tonha"] = ((TRTS$X1FtLitter+TRTS$X3FtLitter)/2)*TRTS$LitterCoeff*10
+
+TRTS["fuelload_duff_tonha"] = ((TRTS$X1FtDuff+TRTS$X3FtDuff)/2)*TRTS$DuffCoeff*10
+
+TRTS["fuelload_litterduff_tonha"] = ((TRTS$X1FtLitter+TRTS$X3FtLitter+TRTS$X3FtDuff+TRTS$X1FtDuff)/2)*TRTS$LitterDuffCoeff*10
+
+
+# So the combo litter/duff estimate does not equal the litter estimate + duff estimate
+# VW98 gave a separate set of coefficients for litter/duff combo, which I think is the source of the
+# discrepancy. Not sure which to consider more accurate. (Check moghaddas spreadsheet method)
+
+# 1-100 hour fuels
+# W = (n)(constant)(c)(coeff)/(length)
+
+kvals
+
+# we want k = 1.234 (diam units are for the QMD values, which are cm2 in van Wagtendonk et al 1996,
+# converting transect lengths to metric for simplicity sake)
+
+
+TRTS["fuelload_1h_tonha"] = TRTS$To.24Inch*(1.234)*TRTS$slp_c*TRTS$x1h_coeff/TRTS$x1h_L
+
+
+TRTS["fuelload_10h_tonha"] = TRTS$To1Inch*(1.234)*TRTS$slp_c*TRTS$x10h_coeff/TRTS$x10h_L
+
+TRTS["fuelload_100h_tonha"] = TRTS$To3Inch*1.234*TRTS$slp_c*TRTS$x100h_coeff/TRTS$x100h_L
+
+
+# 1000-hour fuels
+# W = (constant)(c)(SG)(SEC)(sum(d2)) / length
+# (SG)(SEC) = coeff
+
+TRTS["fuelload_1000s_tonha"] = 1.234*TRTS$slp_c*TRTS$x1000s_coeff*(TRTS$sum_d2cm_S)/TRTS$x1000h_L
+
+TRTS["fuelload_1000r_tonha"] = 1.234*TRTS$slp_c*TRTS$x1000r_coeff*(TRTS$sum_d2cm_R)/TRTS$x1000h_L
+
+TRTS["fuelload_1000h_tonha"] = TRTS$fuelload_1000s_tonha+TRTS$fuelload_1000r_tonha
+
+
+# for final sum, need to decide whether to use litter + duff or litterduff
+# Moghaddas used litterduff, for the 2012 paper Brandon used litter+duff+cwd. 
+# As oversion 4, I'm going to use litter + duff + cwd,
+# for the sake of simplicity. I don't see a clear reason litterduff would be superior to litter+duff,
+# And using litter+duff is the more obvious, intuitive, and clear way to calculate total
+
+TRTS["fuelload_1.100h_tonha"] = TRTS$fuelload_1h_tonha+TRTS$fuelload_10h_tonha+TRTS$fuelload_100h_tonha
+
+TRTS["fuelload_1.1000h_tonha"] = TRTS$fuelload_1h_tonha+TRTS$fuelload_10h_tonha+TRTS$fuelload_100h_tonha+TRTS$fuelload_1000h_tonha
+
+TRTS["fuelload_total_tonha"] = TRTS$fuelload_1.1000h_tonha+TRTS$fuelload_litter_tonha+TRTS$fuelload_duff_tonha
+
+TRTS['fuelload_surface_tonha'] = TRTS$fuelload_1.1000h_tonha+TRTS$fuelload_litter_tonha
+
+```
+
+###QC checks
+
+
+###QC checks and cleaning
+
+```{r}
+# NAs?
+
+TRTS[!complete.cases(TRTS),]
+
+TRTS[is.na(TRTS$fuelload_1.1000h_tonha),]
+
+length(unique(TRTS[is.na(TRTS$slp_c),"PlotID"]))
+
+
+
+TRTS[is.na(TRTS$fuelload_total_tonha),] # any transects missing important measurements were dropped on import
+
+
+# values for litter, 100h, and total look reasonable? Compare to Brandon's values and/or lit
+
+mean(TRTS$fuelload_1.1000h_tonha) # looks good
+
+mean(TRTS$fuelload_1.100h_tonha) # good
+
+mean(TRTS$fuelload_1000r_tonha) # good
+
+mean(TRTS$fuelload_1000s_tonha) # good
+
+mean(TRTS$fuelload_litter_tonha) # looks good
+
+mean(TRTS$fuelload_duff_tonha) #looks good
+
+mean(TRTS$fuelload_total_tonha) # About right? hard to tell ther's a wide difference between treatments
+
+# yes they are all reasonable. Not consistently off by a factor of 2 or anything. Still need to individual plot/transect outliers
+
+n_occur = data.frame(table(TRTS$InvID.fuels))
+
+n_occur[n_occur$Freq!=2,]
+
+# rows with 1 transect, 4 transects. As of version 3, I'm not going to check these out in detail. They look like cases of missing or misnumbered transects (count=1s) or the "twice in a month" measure of unit 490 in 2003, mostly
+
+# Unit 490 was measured twice in May 2003, so there's no problem with 4 transects for those invIDs as long as I don't naively aggregate by invid
+
+# invid 3983 has an NA for the second transect's azimuth in the BFRS database. I'm using the 'additional' database for 2001 so not a problem
+TRTS[TRTS$InvID.fuels==3983,]
+# invid 6603
+TRTS[TRTS$InvID.fuels==6603,] # only one transect recorded
+#invid 7149
+
+# Invid 20010519024
+TRTS[TRTS$InvID.fuels==20010519024,] # missing 1-100h tallies for the second transect in source data
+#invid 20030519024
+TRTS[TRTS$InvID.fuels==20030519024,] # missing 1-100h tallies for the second transect (makes you wonder if there was something preventing or discouraging crews from running a transect on this plot...)
+
+# invid 20100634024
+TRTS[TRTS$InvID.fuels==20100634026,] #missing the second transect in the source data
+
+# invid 200305590111
+TRTS[TRTS$InvID.fuels==200305590111,]
+
+# invid 200306190102 transect for AZ 19 on this measurement is missing a litter depth, so it got dropped above
+
+# invid 200906590102 one of the transects is missing litter and duff depths, so it got dropped above
+
+# invid 201006340124 is missing a second transect in the source data
+
+```
+
+####Dropping all sampling events with only one complete transect
+
+If I decide to include these later on, I can comment out this code:
+
+```{r}
+only_one_transect = n_occur[n_occur$Freq==1,'Var1']
+only_one_transect
+TRTS = TRTS[!is.element(TRTS$InvID.fuels,only_one_transect),]
+```
+
+
+##Aggregate from transects to plots
+
+```{r}
+head(TRTS)
+
+# first, drop columns we don't want
+drops = c('Species',"To.24Inch","To1Inch","To3Inch","X1FtDuff","X1FtLitter","X3FtDuff","X3FtLitter","X1FtFuel","X2FtFuel","X3FtFuel","sum_d2cm_R","sum_d2cm_S","InvID.trees","slp_c","Azimuth","Pcomments","LitterCoeff","DuffCoeff","LitterDuffCoeff","x1h_coeff","x10h_coeff","x100h_coeff","x1000s_coeff","x1000r_coeff","x1h_L","x10h_L","x100h_L","x1000h_L")
+
+TRTS.results = TRTS[,!(names(TRTS) %in% drops)]
+
+# Plot 190-00102 in pretreatment the different transects were measured on different days, so the aggregate below keeps them separate:
+TRTS.results[TRTS.results$PlotID=='0190-00102'&TRTS.results$Invdate.fuels=='2001-05-30','Invdate.fuels'] = '2001-06-01'
+
+# NAs must either be dropped above, or in the X of the x~y below. Cannot have NAs in the by lists. Would like to keep pcomments, but
+# unfortunately it cannot be done. will have to search for appropriate pcomments in TRTS or TRTS.results:
+
+PLOTS = aggregate(.~Source+Unit+Year+Invdate.fuels+Invdate.trees+PlotID+InvID.fuels,FUN=mean,data=TRTS.results,na.action=na.pass)
+
+
+
+```
+
+
+###QC checks and cleaning
+
+
+```{r}
+head(PLOTS)
+
+
+setdiff(TRTS$InvID.fuels,PLOTS$InvID.fuels) # there are no invids in TRTS not in PLOTS
+
+setdiff(PLOTS$InvID.fuels,TRTS$InvID.fuels) # and vice versa
+
+# Check number of unique plots and number of unique invids per year in both sets (?)
+
+yrs = sort(unique(year(TRTS$Invdate.fuels)))
+
+nplots_trts_bfrs = c()
+
+for (y in yrs){
+  l = length(unique(TRTS[TRTS$Source=="BFRS"&year(TRTS$Invdate.fuels)==y,"PlotID"]))
+  nplots_trts_bfrs = append(nplots_trts_bfrs,l)
+}
+
+nplots_PLOTS_bfrs = c()
+
+for (y in yrs){
+  l = length(unique(PLOTS[PLOTS$Source=="BFRS"&year(PLOTS$Invdate.fuels)==y,"PlotID"]))
+  nplots_PLOTS_bfrs = append(nplots_PLOTS_bfrs,l)
+}
+
+nplots_trts_ffs = c()
+
+for (y in yrs){
+  l = length(unique(TRTS[TRTS$Source=="FFS"&year(TRTS$Invdate.fuels)==y,"PlotID"]))
+  nplots_trts_ffs = append(nplots_trts_ffs,l)
+}
+
+nplots_PLOTS_ffs = c()
+
+for (y in yrs){
+  l = length(unique(PLOTS[PLOTS$Source=="FFS"&year(PLOTS$Invdate.fuels)==y,"PlotID"]))
+  nplots_PLOTS_ffs = append(nplots_PLOTS_ffs,l)
+}
+
+
+overview.PLOTS = data.frame(Year=yrs,plots_trts_bfrs=nplots_trts_bfrs,plots_trts_ffs=nplots_trts_ffs,plots_plots_bfrs=nplots_PLOTS_bfrs,plots_plots_ffs=nplots_PLOTS_ffs)
+
+overview.PLOTS
+
+# are invids unique in plots? they should be! (other than unit 490 in may 2003)
+
+noccur = data.frame(table(PLOTS$InvID))
+
+noccur[noccur$Freq!=1,] # only unit 490 in may 2003
+
+```
+
+####QC: Compare against Previous Fuel Load Estimates
+
+
+Only 2009 is directly comparable, because in 2001 and 2003 previous studies used by-unit overstories to calculate fuel loads. Also, my 2003 data includes multiple intermediate measurements, wheras the tables from Brandon only include the final "posttreatment" measurements, which is why they are so far off. The noisy relationship between my estimates and brandon's in earlier versions of this analysis almost completely disappears if we only look at the 2009 preburn data. Another source of discrepancy is that Brandon's treelists include small diameter seedlings which I've dropped, though this shouldn't be a big deal in most cases. 
+
+Finally, there is a discrepancy in terms of calculating the total fuel load. For the 2005 paper (and the 2001/2003 data used in the 2012 paper) Moghaddas calculated the "total fuel load" by adding the load of woody fuels to the weight of "combined litter and duff". "Combined litter and duff" was calculated by multiplying a distinct "litter+duff" coefficient to the combined depth of litter and duff. By contrast, for the 2012 paper (which is the source of the "bplots" data I'm using for comparison) Brandon calculated the total fuel loads by adding the fuel load of litter to the fuel load of duff to the total fuel loads. Because "fuel load litter" + "fuel load duff" != "fuel load of litter and duff", there's a discrepancy. From these data it appareas that the "combined litter and duff coefficient" method used by Moghaddas overestimates fuel load relative to calculating litter and duff separately and then summing them, as Brandon did in 2012. The 2012 "fuel longevity" paper consistently used the latter method, so the cross-year comparisons are still valid. (And in any case, this question only affects cases where we are combining litter and duff loads together). 
+
+```{r}
+tocheck = PLOTS[PLOTS$Source=="FFS",]
+
+
+YearToTiming = function(y){
+  if (y==2001)
+    {return("Pre")}
+    else
+      {if (y==2003)
+        {return("Post1")}
+        else
+          {if (y==2009)
+            {return("Post7")}
+            else
+              {return("Other")}
+    }}
+}
+
+
+tocheck["Timing"] = sapply(year(tocheck$Invdate.fuels),YearToTiming)
+
+# drop the post-burn 2009 measurements from october 2009
+tocheck = tocheck[month(tocheck$Invdate.fuels)!=10&year(tocheck$Invdate.fuels)==2009,]
+
+
+### loading brandon's version
+
+# Getting the Data
+bplots = read.csv("D://Foster/FFS/Data Sources/From_bCollins_f2016/BlodgettPlots.csv")
+bfuels = read.csv("D://Foster/FFS/Data Sources/From_bCollins_f2016/BlodgettFuels.csv")
+
+# Basic cleaning
+bplots = bplots[bplots$Err==0,]
+bfuels = bfuels[bfuels$Err==0,]
+
+bfuels$Timing=factor(bfuels$Timing,levels=c("Pre","Post1","Post7"),ordered=TRUE)
+bplots$Timing=factor(bplots$Timing,levels=c("Pre","Post1","Post7"),ordered=TRUE)
+
+
+library(stringr)
+
+bfuels["PlotID"] = paste(str_pad(string=bfuels$Unit,width=4,side="left",pad="0"),str_pad(string=bfuels$Plot,width=5,side="left",pad="0"),sep="-")
+
+bplots["PlotID"] = paste(str_pad(string=bplots$Unit,width=4,side="left",pad="0"),str_pad(string=bplots$Plot,width=5,side="left",pad="0"),sep="-")
+
+# Merging the two datasets
+
+# This needs to be changed, the timing things don't match right now
+combo = merge(x=bfuels,y=tocheck,by.x=c("Timing","PlotID"),by.y=c("Timing","PlotID"),sort=TRUE)
+
+
+combo["litrat"] = combo$fuelload_litter_tonha/combo$Litter
+
+combo["duffrat"] = combo$fuelload_duff_tonha/combo$Duff
+
+combo["x1hrat"] = combo$fuelload_1h_tonha/combo$X1
+
+combo["x10hrat"] = combo$fuelload_10h_tonha/combo$X10
+
+combo["x100hrat"] = combo$fuelload_100h_tonha/combo$X100
+
+combo["x1000hrat"] = (combo$fuelload_1000s_tonha+combo$fuelload_1000r_tonha)/combo$X1000
+
+combo["totalrat"] = combo$fuelload_total_tonha/combo$TotalFuelLoad
+
+
+
+# fairly noisy, variance in Y does seem to increase with variance in X
+
+plot(combo$fuelload_duff_tonha~combo$Duff)
+abline(0,1,col="red")
+
+# Loooks relatively good, if anything the variation is highest at the low end
+
+
+plot(combo$fuelload_1h_tonha~combo$X1)
+abline(0,1,col="red")
+# basically OK
+
+plot(combo$fuelload_10h_tonha~combo$X10)
+abline(0,1,col="red")
+# other than the super far off value, basically OK
+
+plot(combo$fuelload_100h_tonha~combo$X100)
+abline(0,1,col="red")
+
+
+hist(combo[combo$litrat,"litrat"])
+
+
+
+mean(combo[!is.na(combo$litrat)&combo$Litter!=0,"litrat"])
+sd(combo[!is.na(combo$litrat)&combo$Litter!=0,"litrat"])
+
+#looks worse than before!
+hist(combo$duffrat)
+
+mean(combo[!is.na(combo$duffrat)&combo$Duff!=0,"duffrat"])
+sd(combo[!is.na(combo$duffrat)&combo$Duff!=0,"duffrat"])
+
+hist(combo$x1hrat)
+
+mean(combo[!is.na(combo$x1hrat)&combo$X1!=0,"x1hrat"])
+sd(combo[!is.na(combo$x1hrat)&combo$X1!=0,"x1hrat"])
+
+hist(combo$x10hrat)
+
+mean(combo[!is.na(combo$x10hrat)&combo$X10!=0,"x10hrat"])
+sd(combo[!is.na(combo$x10hrat)&combo$X10!=0,"x10hrat"])
+
+hist(combo$x100hrat)
+
+mean(combo[!is.na(combo$x100hrat)&combo$X100!=0,"x100hrat"])
+sd(combo[!is.na(combo$x100hrat)&combo$X100!=0,"x100hrat"])
+
+hist(combo$x1000hrat)
+
+mean(combo[!is.na(combo$x1000hrat)&!is.infinite(combo$x1000hrat),"x1000hrat"])
+sd(combo[!is.na(combo$x1000hrat)&!is.infinite(combo$x1000hrat),"x1000hrat"])
+
+hist(combo$totalrat)
+
+mean(combo[!is.na(combo$totalrat),"totalrat"])
+sd(combo[!is.na(combo$totalrat),"totalrat"])
+
+
+head(combo)
+
+brandons_estimates = c('Duff','Litter','X1','X10','X100','X1000','X1.100','TotalFuelLoad')
+
+foster_estimates = c('fuelload_litter_tonha','fuelload_duff_tonha','fuelload_1h_tonha','fuelload_10h_tonha','fuelload_100h_tonha','fuelload_1000h_tonha','fuelload_1.100_tonha','fuelload_total_tonha')
+
+library(ggplot2)
+
+for (i in 1:8){
+  print(ggplot(data=combo,aes_string(x=brandons_estimates[i],y=brandons_estimates[i]))+geom_point()+geom_smooth(method="lm")+geom_abline(slope=1,intercept=0))
+}
+
+
+# Visuals for combo
+
+plot(combo$fuelload_litter_tonha~combo$Litter)
+abline(0,1,col="red")
+# also problematic
+
+
+plot(combo$fuelload_1000h_tonha~combo$X1000)
+abline(0,1,col="red")
+# Cluster of values where I estimate 0 but brandon has 0<x<20, one very far off value
+
+plot(combo$fuelload_total_tonha~combo$TotalFuelLoad) # i don't understand why this looks so good on ggplot and so bad here.
+abline(0,1,col="red")
+# over-estimating total load
+
+plot(combo$TotalFuelLoad~combo$fuelload_total_tonha)
+
+library(ggplot2)
+
+ggplot(combo,aes(y=fuelload_total_tonha,x=TotalFuelLoad,col=as.factor(Year)))+geom_point()+geom_smooth(method="lm")+geom_abline(slope=1,intercept=0) # again, totals look really bad here...
+
+combo['alternate_fuelload_total_tonha'] = combo$fuelload_litter_tonha+combo$fuelload_duff_tonha+combo$fuelload_1.1000h_tonha
+
+ggplot(combo,aes(y=alternate_fuelload_total_tonha,x=TotalFuelLoad,col=as.factor(Year)))+geom_point()+geom_smooth(method="lm")+geom_abline(slope=1,intercept=0) # Totals look much better here: The difference is that when calculating fuel load total in 2009, Eric Roller added the Litter and Duff weights to the woody fuels weights, rather than adding the Litter+Duff weight (calculated with it's own coefficient) to the woody fuels weights. Interestingly, the latter method (used by Moghaddas for the 2005 paper) appears to consistently estimate higher loads than Roller's method does.
+
+ggplot(combo,aes(y=fuelload_litter_tonha,x=Litter,col=as.factor(Year)))+geom_point()+geom_smooth(method="lm")+geom_abline(slope=1,intercept=0) # 2009, which is the one that should match right (no intermediate measurements and was calculated with plot overstories) looks great
+
+
+ggplot(combo[combo$Year==2009,],aes(y=fuelload_duff_tonha,x=Duff,col=as.factor(Year)))+geom_point()+geom_smooth(method="lm")+geom_abline(slope=1,intercept=0) # again 2009 looks great
+
+ggplot(combo,aes(y=fuelload_100h_tonha,x=X100,col=as.factor(Year)))+geom_point()+geom_smooth(method="lm")+geom_abline(slope=1,intercept=0)
+
+ggplot(combo,aes(y=fuelload_1.100h_tonha,x=X1.100,col=as.factor(Year)))+geom_point()+geom_smooth(method="lm")+geom_abline(slope=1,intercept=0)
+
+
+```
+
+Overall this looks great now that I'm being careful to compare apples to apples. There is that one plot that's way off, let's check that....
+
+
+```{r}
+combo[combo$alternate_fuelload_total_tonha<100&combo$TotalFuelLoad>125,]
+
+TRTS[TRTS$PlotID=='0350-00101'&TRTS$Year==2009&TRTS$Source=="FFS",] # it looks like I have an extra transect which was not included in Roller's table. My estimates for the transect at AZ 349 closely match roller's calculations for the same transect, but he does not have another transect to average it with. The missing transect was originally mislabeled as from 0340-00010, and my version corrects this.
+```
+
+####Write TRTS.full and PLOTS.full to csv for later use
+
+```{r}
+write.csv(TRTS,file='Output_Tables/Fuels_byplot_Transects_full.csv',row.names=FALSE)
+write.csv(PLOTS,file='Output_Tables/Fuels_byPlot_Plots_full.csv',row.names=FALSE)
+```
+
+##Prep FFS-specific transect, plot, and unit tables
+
+
+(See FFS/Context/FFS_stand summary_treatments_measurements.xlsx for more information. Thanks to Ariel Thomson for compiling this information!)
+
+The FFS took place from 2001 onwards in units:
+
+Unit | Treatment |
+-----|-----------|
+40|Control
+240|Control
+590|Control
+60|Burn
+340|Burn
+400|Burn
+190|Mechanical
+350|Mechanical
+490|Mechanical
+180|Mech+Burn
+380|Mech+Burn
+570|Mech+Burn
+
+Some or all FFS plots were measured in 2001, 2002, 2003, 2009, 2010, 2016 and 2017.
+
+
+####Filter to FFS-only years and units
+
+```{r}
+
+units_ffs = c("0040","0240","0590","0060","0340","0400","0190","0350","0490","0180","0380","0570")
+
+
+# My FFS-specific dataset is all the data already tagged as FFS (from those source files), plus the data from the BFRS files for 2016 (2017 postburn measurements have their "Year" value set to 2016 to match with 2016 treelists)
+PLOTS.ffs = PLOTS[PLOTS$Source=="FFS"|PLOTS$Year==2016,]
+TRTS.ffs = TRTS[TRTS$Source=="FFS"|TRTS$Year==2016,]
+
+
+```
+
+
+####Add column for Treatment
+
+```{r}
+
+PLOTS.ffs[is.element(as.character(PLOTS.ffs$Unit),c("0040","0240","0590")),"Treatment"] = "Control"
+
+PLOTS.ffs[is.element(as.character(PLOTS.ffs$Unit),c("0060","0340","0400")),"Treatment"] = "Burn"
+
+PLOTS.ffs[is.element(as.character(PLOTS.ffs$Unit),c("0190","0350","0490")),"Treatment"] = "Mech"
+
+PLOTS.ffs[is.element(as.character(PLOTS.ffs$Unit),c("0180","0380","0570")),"Treatment"] = "MechBurn"
+
+PLOTS.ffs["Treatment"] = as.factor(PLOTS.ffs$Treatment)
+
+
+
+TRTS.ffs[is.element(as.character(TRTS.ffs$Unit),c("0040","0240","0590")),"Treatment"] = "Control"
+
+TRTS.ffs[is.element(as.character(TRTS.ffs$Unit),c("0060","0340","0400")),"Treatment"] = "Burn"
+
+TRTS.ffs[is.element(as.character(TRTS.ffs$Unit),c("0190","0350","0490")),"Treatment"] = "Mech"
+
+TRTS.ffs[is.element(as.character(TRTS.ffs$Unit),c("0180","0380","0570")),"Treatment"] = "MechBurn"
+
+
+TRTS.ffs["Treatment"] = as.factor(TRTS.ffs$Treatment)
+
+```
+
+
+
+####Add column for disturbance since last measurement
+
+Again, referring to a table constructed using Moghaddas' spreadsheets and the table from Ariel Thompson.
+
+
+Units | Treatment | Fuels Measurement | Associated Tree Data|Invdate range for fuels data
+------|-----------|-------------------|---------------------|----------------------------
+40,240,590|Control|Pretreatment 2001|2001|July 2001 (40, 240), June 2001 (590)
+40,240,590|Control|Posttreatment 2003|2003|June 2003 (40, 240), May 2003 (590)
+60,340,400|Burn|Pretreatment 2001|2001|July 2001 (60), July/August 2001 (340), August 2001 (400)
+60,340,400|Burn|Post burn 2002|2003|February 2003
+60,340,400|Burn|Post treatment 2003|2003|June 2003 (340), July 2003 (60), june/july 2003 (400)
+60,340,400|Burn|Post burn 2009|2009|October 2009
+60,340,400|Burn|Post burn 2017|2016|November and December 2017
+190,350,490|Mech|Pretreatment 2001|2001|May/June 2001 (190), June 2001 (350), May 2001 (490)
+190,350,490|Mech|Post Harvest 2002|2001|May 2002
+190,350,490|Mech|Post mastication 2002|2003|April/May 2003 (190), sept 2002 (350), May 2003 (490)
+190,350,490|Mech|Post treatment 2003| 2003|May 2003 (490), June 2003 (190, 350)
+180,380,570|BurnMech|Pretreatment 2001|2001|June/July 2001 (180), June 2001 (380, 570)
+180,380,570|BurnMech|Post Harvest 2002|2001|May 2002 (380, 570)
+180,380,570|BurnMech|Post mastication 2002|2003| May 2002 (180), July 2002 (380), august/july 2002 (570)
+180,380,570|BurnMech|Post burn 2002|2003|December 2002
+180,380,570|BurnMech|Post Treatment 2003|2003| June 2003 (180, 570), july 2003 (380)
+
+
+```{r}
+
+# by default, disturbance is "None"
+
+PLOTS.ffs["disturbance"] = "None"
+
+# For units 60,340, and 400, the february 2003 measurements are post-burn data
+
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c("0060","0340","0400"))&
+            month(PLOTS.ffs$Invdate.fuels)==2&
+            year(PLOTS.ffs$Invdate.fuels)==2003,
+          "disturbance"] = "Burn"
+
+# for units 190, 350, and 490 the may 2002 measurements are post-harvest data
+
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c("0190","0350","0490"))&
+            month(PLOTS.ffs$Invdate.fuels)==5&
+            year(PLOTS.ffs$Invdate.fuels)==2002,
+          "disturbance"] = "Harvest"
+
+# For units 190, 350, and 490 various month/year measurements are post-mastication data
+
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c("0190"))&
+          is.element(month(PLOTS.ffs$Invdate.fuels),c(4,5))&
+            year(PLOTS.ffs$Invdate.fuels)==2003,
+          "disturbance"] = "Mastication"
+
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c("0350"))&
+          is.element(month(PLOTS.ffs$Invdate.fuels),c(9))&
+            year(PLOTS.ffs$Invdate.fuels)==2002,
+          "disturbance"] = "Mastication"
+
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c("0490"))&
+          is.element(month(PLOTS.ffs$Invdate.fuels),c(5))&
+            day(PLOTS.ffs$Invdate.fuels)<15&
+            year(PLOTS.ffs$Invdate.fuels)==2003,
+          "disturbance"] = "Mastication"
+
+# for units 380, 570 may 2002 is post-harvest data (180 not actually measured)
+
+
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c("0380","0570"))&
+            month(PLOTS.ffs$Invdate.fuels)==5&
+            year(PLOTS.ffs$Invdate.fuels)==2002,
+          "disturbance"] = "Harvest"
+
+# for unit 180, may 2002 is post-masticatino data
+
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c("0180"))&
+          is.element(month(PLOTS.ffs$Invdate.fuels),c(5))&
+            year(PLOTS.ffs$Invdate.fuels)==2002,
+          "disturbance"] = "Mastication"
+
+# For unit 380, july 2002 is post-mastication data
+
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c("0380"))&
+          is.element(month(PLOTS.ffs$Invdate.fuels),c(7))&
+            year(PLOTS.ffs$Invdate.fuels)==2002,
+          "disturbance"] = "Mastication"
+
+# For unit 570, august/july 2002 are post mastication data
+
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c("0570"))&
+          is.element(month(PLOTS.ffs$Invdate.fuels),c(7,8))&
+            year(PLOTS.ffs$Invdate.fuels)==2002,
+          "disturbance"] = "Mastication"
+
+# For units 180, 380, 570 december 2002 are post-burn data
+
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c("0180","0380","0570"))&
+            month(PLOTS.ffs$Invdate.fuels)==12&
+            year(PLOTS.ffs$Invdate.fuels)==2002,
+          "disturbance"] = "Burn"
+
+# for units 60, 340, 400, October 2009 data are post burn-data
+
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c("0060","0340","0400"))&
+            month(PLOTS.ffs$Invdate.fuels)==10&
+            year(PLOTS.ffs$Invdate.fuels)==2009,
+          "disturbance"] = "Burn2"
+
+# for units 60, 340, and 400 Nov/Dec 2017 are post-burn data
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c("0060","0340","0400"))&
+            is.element(month(PLOTS.ffs$Invdate.fuels),c(11,12))&
+            year(PLOTS.ffs$Invdate.fuels)==2017,
+          "disturbance"] = "Burn3"
+
+
+## Same code for TRTS.ffs
+
+# by default, disturbance is "None"
+
+TRTS.ffs["disturbance"] = "None"
+
+# For units 60,340, and 400, the february 2003 measurements are post-burn data
+
+TRTS.ffs[is.element(TRTS.ffs$Unit,c("0060","0340","0400"))&
+            month(TRTS.ffs$Invdate.fuels)==2&
+            year(TRTS.ffs$Invdate.fuels)==2003,
+          "disturbance"] = "Burn"
+
+# for units 190, 350, and 490 the may 2002 measurements are post-harvest data
+
+TRTS.ffs[is.element(TRTS.ffs$Unit,c("0190","0350","0490"))&
+            month(TRTS.ffs$Invdate.fuels)==5&
+            year(TRTS.ffs$Invdate.fuels)==2002,
+          "disturbance"] = "Harvest"
+
+# For units 190, 350, and 490 various month/year measurements are post-mastication data
+
+TRTS.ffs[is.element(TRTS.ffs$Unit,c("0190"))&
+          is.element(month(TRTS.ffs$Invdate.fuels),c(4,5))&
+            year(TRTS.ffs$Invdate.fuels)==2003,
+          "disturbance"] = "Mastication"
+
+TRTS.ffs[is.element(TRTS.ffs$Unit,c("0350"))&
+          is.element(month(TRTS.ffs$Invdate.fuels),c(9))&
+            year(TRTS.ffs$Invdate.fuels)==2002,
+          "disturbance"] = "Mastication"
+
+TRTS.ffs[is.element(TRTS.ffs$Unit,c("0490"))&
+          is.element(month(TRTS.ffs$Invdate.fuels),c(5))&
+            day(TRTS.ffs$Invdate.fuels)<15&
+            year(TRTS.ffs$Invdate.fuels)==2003,
+          "disturbance"] = "Mastication"
+
+# for units 380, 570 may 2002 is post-harvest data (180 not actually measured)
+
+
+TRTS.ffs[is.element(TRTS.ffs$Unit,c("0380","0570"))&
+            month(TRTS.ffs$Invdate.fuels)==5&
+            year(TRTS.ffs$Invdate.fuels)==2002,
+          "disturbance"] = "Harvest"
+
+# for unit 180, may 2002 is post-masticatino data
+
+TRTS.ffs[is.element(TRTS.ffs$Unit,c("0180"))&
+          is.element(month(TRTS.ffs$Invdate.fuels),c(5))&
+            year(TRTS.ffs$Invdate.fuels)==2002,
+          "disturbance"] = "Mastication"
+
+# For unit 380, july 2002 is post-mastication data
+
+TRTS.ffs[is.element(TRTS.ffs$Unit,c("0380"))&
+          is.element(month(TRTS.ffs$Invdate.fuels),c(7))&
+            year(TRTS.ffs$Invdate.fuels)==2002,
+          "disturbance"] = "Mastication"
+
+# For unit 570, august/july 2002 are post mastication data
+
+TRTS.ffs[is.element(TRTS.ffs$Unit,c("0570"))&
+          is.element(month(TRTS.ffs$Invdate.fuels),c(7,8))&
+            year(TRTS.ffs$Invdate.fuels)==2002,
+          "disturbance"] = "Mastication"
+
+# For units 180, 380, 570 december 2002 are post-burn data
+
+TRTS.ffs[is.element(TRTS.ffs$Unit,c("0180","0380","0570"))&
+            month(TRTS.ffs$Invdate.fuels)==12&
+            year(TRTS.ffs$Invdate.fuels)==2002,
+          "disturbance"] = "Burn"
+
+# for units 60, 340, 400, october 2009 data are post burn-data
+
+TRTS.ffs[is.element(TRTS.ffs$Unit,c("0060","0340","0400"))&
+            month(TRTS.ffs$Invdate.fuels)==10&
+            year(TRTS.ffs$Invdate.fuels)==2009,
+          "disturbance"] = "Burn2"
+# for units 60, 340, and 400 Nov/Dec 2017 are post-burn data
+TRTS.ffs[is.element(TRTS.ffs$Unit,c("0060","0340","0400"))&
+            is.element(month(TRTS.ffs$Invdate.fuels),c(11,12))&
+            year(TRTS.ffs$Invdate.fuels)==2017,
+          "disturbance"] = "Burn3"
+
+```
+
+####Add column for timestep
+
+The idea here is to flag the "pretreatment", "intermediate", "post-treatment", "7 years later", "post-reburn", and "15 years later" measurements. There are multiple measurements from 2003 that fall into multiple categories, which is why we can't just do this based on year.
+
+```{r}
+# Default value is NA
+PLOTS.ffs['Timestep'] = NA
+
+# All 2001 measurements are "Pretreatment"
+PLOTS.ffs[year(PLOTS.ffs$Invdate.fuels)==2001,'Timestep'] = 'Pretreatment'
+
+# All measurements from 2002 are "Intermediate"
+PLOTS.ffs[year(PLOTS.ffs$Invdate.fuels)==2002,'Timestep'] = 'Intermediate'
+
+# Some measurements from 2003 are "intermediate". We're going to flag all as intermediate first and then overwrite the ones that are final post-treatment measurements
+PLOTS.ffs[year(PLOTS.ffs$Invdate.fuels)==2003,'Timestep'] = 'Intermediate'
+
+# Also labelling the postburn (burn1) measurements, which were in feb 2003 in units 60, 340, and 400:
+PLOTS.ffs[year(PLOTS.ffs$Invdate.fuels)==2003&month(PLOTS.ffs$Invdate.fuels)==2&is.element(PLOTS.ffs$Unit,c('0060','0340','0400')),'Timestep'] = 'Post_burn1'
+
+# For Control units, all 2003 measurements are 'Post_1'
+# For treated units, there was a measurement after every treatment step, and then another final 'Post_1' measurement.
+# so 'Post_1' is measurements that occured in 2003 and have no disturbance since the previous measurement.
+PLOTS.ffs[year(PLOTS.ffs$Invdate.fuels)==2003&PLOTS.ffs$disturbance=='None','Timestep'] = 'Post_1'
+
+# For most units, all 2009 measurements are 'Post_7'
+PLOTS.ffs[year(PLOTS.ffs$Invdate.fuels)==2009,'Timestep'] = 'Post_7'
+
+# for comps 60, 340, and 400, the october 2009 measurements are 'post_burn2'
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c('0060','0340','0400'))&year(PLOTS.ffs$Invdate.fuels)==2009&month(PLOTS.ffs$Invdate.fuels)==10,'Timestep'] = 'Post_burn2'
+
+# For comps 60, 340, and 400 (burn only treatment), the 2010 measurements are 'Post_8'
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c('0060','0340','0400'))&year(PLOTS.ffs$Invdate.fuels)==2010,'Timestep'] = 'Post_8'
+
+# for all units, all 2016 measurements are fourteen years after the beginning of the treatment regimen 'Post_14'
+PLOTS.ffs[year(PLOTS.ffs$Invdate.fuels)==2016,'Timestep'] = 'Post_14'
+
+# For comps 60, 340, and 400 (burn only treatment), the 2017 measurements are 'Post_burn3'
+PLOTS.ffs[is.element(PLOTS.ffs$Unit,c('0060','0340','0400'))&year(PLOTS.ffs$Invdate.fuels)==2017,'Timestep'] = 'Post_burn3'
+
+
+
+
+
+# Repeating the above for transects
+# Default value is NA
+TRTS.ffs['Timestep'] = NA
+
+# All 2001 measurements are "Pretreatment"
+TRTS.ffs[year(TRTS.ffs$Invdate.fuels)==2001,'Timestep'] = 'Pretreatment'
+
+# All measurements from 2002 are "Intermediate"
+TRTS.ffs[year(TRTS.ffs$Invdate.fuels)==2002,'Timestep'] = 'Intermediate'
+
+# Some measurements from 2003 are "intermediate". We're going to flag all as intermediate first and then overwrite the ones that are final post-treatment measurements
+TRTS.ffs[year(TRTS.ffs$Invdate.fuels)==2003,'Timestep'] = 'Intermediate'
+
+# Also labelling the postburn (burn1) measurements, which were in feb 2003 in units 60, 340, and 400:
+TRTS.ffs[year(TRTS.ffs$Invdate.fuels)==2003&month(TRTS.ffs$Invdate.fuels)==2&is.element(TRTS.ffs$Unit,c('0060','0340','0400')),'Timestep'] = 'Post_burn1'
+
+# For Control units, all 2003 measurements are 'Post_1'
+# For treated units, there was a measurement after every treatment step, and then another final 'Post_1' measurement.
+# so 'Post_1' is measurements that occured in 2003 and have no disturbance since the previous measurement.
+TRTS.ffs[year(TRTS.ffs$Invdate.fuels)==2003&TRTS.ffs$disturbance=='None','Timestep'] = 'Post_1'
+
+# For most units, all 2009 measurements are 'Post_7'
+TRTS.ffs[year(TRTS.ffs$Invdate.fuels)==2009,'Timestep'] = 'Post_7'
+
+# for comps 60, 340, and 400, the october 2009 measurements are 'post_burn2'
+TRTS.ffs[is.element(TRTS.ffs$Unit,c('0060','0340','0400'))&year(TRTS.ffs$Invdate.fuels)==2009&month(TRTS.ffs$Invdate.fuels)==10,'Timestep'] = 'Post_burn2'
+
+# For comps 60, 340, and 400 (burn only treatment), the 2010 measurements are 'Post_8'
+TRTS.ffs[is.element(TRTS.ffs$Unit,c('0060','0340','0400'))&year(TRTS.ffs$Invdate.fuels)==2010,'Timestep'] = 'Post_8'
+
+# for all units, all 2016 measurements are fourteen years after the beginning of the treatment regimen 'Post_14'
+TRTS.ffs[year(TRTS.ffs$Invdate.fuels)==2016,'Timestep'] = 'Post_14'
+
+
+# For comps 60, 340, and 400 (burn only treatment), the 2017 measurements are 'Post_burn3'
+TRTS.ffs[is.element(TRTS.ffs$Unit,c('0060','0340','0400'))&year(TRTS.ffs$Invdate.fuels)==2017,'Timestep'] = 'Post_burn3'
+
+
+```
+
+
+
+####Drop Transects and plots which don't have a measurement for every timestep
+
+Excepting 'Intermediate', 'Post_burn1', 'Post_8', and 'Post_burn2', and 'Post_burn3' which not all treatments have.
+
+```{r}
+
+n_occur = data.frame(table(PLOTS.ffs[!is.element(PLOTS.ffs$Timestep,c('Intermediate','Post_burn2', 'Post_burn1', 'Post_8','Post_burn3')),'PlotID']))
+
+
+n_occur2 = data.frame(table(PLOTS.ffs$Unit,PLOTS.ffs$Timestep))
+
+names(n_occur2) = c('Unit','Timestep','Nplots')
+
+molten.n_occur2 = melt(n_occur2,value.names='Nplots',id.vars=c('Unit','Timestep'))
+
+plot_numbers = dcast(molten.n_occur2,Unit~Timestep)
+
+plot_numbers # 3 plots missing from unit 60: 102 is dropped "bogus witness info", no measurement for 130, one of the and 114 is i missing the 48 az transect. I can just drop the extra 113, (it was all 0s measurements) but I'm not sure what to do about the missing 114. Is it actually also all 0s (only plotID and az are wrong) or did the whole row get written over? I think probably the latter but cant find the raw datasheets anywhere to check.
+
+
+
+some_missing = n_occur[n_occur$Freq!=0&n_occur$Freq!=4,] # plots that occur 0 times are listed in the levels of plot because they exist in the BFRS database (most of which I've dropped at this point), plots that occur 4 times have measurements for Pretreatment, Post1, post7, and post15
+
+some_missing
+
+# Comparing this list to brandon's notes:
+
+# 0190-00005
+PLOTS.ffs[PLOTS.ffs$PlotID=='0190-00005',] # no 2009 measurement
+
+# 0190-00024
+PLOTS.ffs[PLOTS.ffs$PlotID=='0190-00024',] # no pretreatment measurement (plot was dropped in 2001 because only 1 transect)
+
+# 0190-00115 no 2009 measurement
+PLOTS.ffs[PLOTS.ffs$PlotID=='0190-00115',] # no measurement 2009
+
+#0240-00028 no 2009 measurement or 2016 measurement
+PLOTS.ffs[PLOTS.ffs$PlotID=='0240-00028',] 
+
+# 0340-00115
+PLOTS.ffs[PLOTS.ffs$PlotID=='0340-00115',]  # no 2009 measurement, either before or after burn
+
+# 0380-00002
+PLOTS.ffs[PLOTS.ffs$PlotID=='0380-00002',]  # no 2009 measurement
+
+#0490-00035
+PLOTS.ffs[PLOTS.ffs$PlotID=='0490-00035',]# 'no 2009 meaausrement' in Roller's data, but but I see 2016 and 2009 measurements in the BFRS data... The BFRS database has identical entries for 490-35 and 490-33 in 2009 - one of these measurements is mislabeled. The azimuths in the BFRS database (51 and 311) match the azimuths associated with 490-33 in Moghaddas' 2001 measurements. 490-35 should have azimuths of 87 and 17. There actually is no 2009 measurement of 490-35.
+
+# 0570-00007
+PLOTS.ffs[PLOTS.ffs$PlotID=='0570-00007',]  # only one measurement, in 2016. Brandon's notes indicate that this plot has no pre or post measurements. It's also not included in the FFS plots map for unit 570. I think it's not a mistake, but not an FFS plot (either in the buffer or ina  gorup select). Maybe a typo, and not actually unit 570?
+
+# 0570-00014 no 2009 measurement
+PLOTS.ffs[PLOTS.ffs$PlotID=='0570-00014',] # no 2009 measurement or 2016 measurement. BFRS tables and Roller's tables agree.
+
+# 0590-00007
+PLOTS.ffs[PLOTS.ffs$PlotID=='0590-00007',] # only measured in 2001 and 2003. I actually don't see a plot 7 on the plots map for 590 - maybe a typo of 107 or 117? No: Moghadass' 2001 tables have measurements for 007, 107, and 117 in 2001. Maybe became a group select after 2003 or something?
+
+# 0590-00022
+PLOTS.ffs[PLOTS.ffs$PlotID=='0590-00022',]# only 2001 and 2003 measurements, not listed on the FFS plot map. BFRS and roller's tables agree that this plot was not measured in 2009 or 2016.
+
+# 0590-00102
+PLOTS.ffs[PLOTS.ffs$PlotID=='0590-00102',] # no 2009 measurement. It is listed on the map, and Roller's tables show that one of the transects was missing data, so I've dropped the plot already.
+
+# 0590-00111
+PLOTS.ffs[PLOTS.ffs$PlotID=='0590-00111',] # no post-treatment measurement. One of the transects is missing one value (first litter depth), so i've dropped the plot already.
+
+
+# 0190-000101
+PLOTS.ffs[PLOTS.ffs$PlotID=='0190-00101',] # no 2016 meaurement (rob dropped it from the FFS study, per Ariel)
+
+#0350-00107
+PLOTS.ffs[PLOTS.ffs$PlotID=='0240-00028',] # no 2016 measurement, now in a group selection per Ariel
+
+# 0570-00108
+PLOTS.ffs[PLOTS.ffs$PlotID=='0570-00108',] # only measured in 2001 and 2003. Not in the FFS map. No entries in BFRS database or Roller's spreadsheet.
+
+# all of these should be dropped if we want a measurement for every plot:timestep
+
+plots_to_drop = some_missing$Var1
+
+
+PLOTS.ffs.only_complete = PLOTS.ffs[!is.element(PLOTS.ffs$PlotID,plots_to_drop),]
+
+TRTS.ffs.only_complete = TRTS.ffs[!is.element(TRTS.ffs$PlotID,plots_to_drop),]
+
+
+
+
+# making a list of the good plots (with measurements for every timestep) for easy treelist management later...
+every_timestep_plots = unique(PLOTS.ffs.only_complete$PlotID)
+
+```
+
+#####Repeat checking for burn-only units with the extra measurements START HERE WHY IS 0400-000116 STILL MISSING ONE?
+
+
+```{r}
+
+# For the burn-only units, which have extra measurement intervals:
+
+n_occur_burn = data.frame(table(PLOTS.ffs.only_complete[is.element(PLOTS.ffs.only_complete$Unit,c('0060','0340','0400')),'PlotID']))
+
+some_missing_burn = n_occur_burn[n_occur_burn$Freq!=8&n_occur_burn$Freq!=0,]
+
+some_missing_burn # working through this list...
+
+# 60-102, 60-114, and 60-130 were not measured in the 2009 post-burn measurements
+
+# 60-111, 60-112  340-103, 340-104, 340-111, 340-114, 340-121, 340-124, 400-103, 400-104, 400-110, 400-118 were abandoned and not measured after the burn in 2017 (group select?)
+
+PLOTS.ffs.only_complete[PLOTS.ffs.only_complete$PlotID=='0340-00026',] # missing a transect in 2010
+
+PLOTS.ffs.only_complete[PLOTS.ffs.only_complete$PlotID=='0340-00122',] # not measured in feb 2003 (postburn 1)
+
+PLOTS.ffs.only_complete[PLOTS.ffs.only_complete$PlotID=='0340-00124',] # also missing a transect in 2010
+
+#PLOTS.ffs.only_complete[PLOTS.ffs.only_complete$PlotID=='0400-00112',] # missing in 2010? No: The raw datasheet is there. Data manually added to csv files on 11/29/2017.
+
+#only unaccounted for missing is 400-00116...
+PLOTS.ffs.only_complete[PLOTS.ffs.only_complete$PlotID=='0400-00116',] # missing in 2010... raw datasheet is present in roller's sheets. Looks like I missed it while assempling FFS_compiled_2010.xlsx. Data manually added to csv files on 12/20/2017.
+
+
+
+PLOTS.ffs.only_complete_postburns = PLOTS.ffs.only_complete[!is.element(PLOTS.ffs.only_complete$PlotID,some_missing_burn$Var1),]
+TRTS.ffs.only_complete_postburns = TRTS.ffs.only_complete[!is.element(TRTS.ffs.only_complete$PlotID,some_missing_burn$Var1),]
+
+```
+
+####Filter buffer-zone plots and group selections
+
+Filtering for the buffer zone has already occured, by virtue of my using the FFS-only 'additional' tables and requiring that a plot have a measurement for every year (dropping any 2016 plots which werent in the earlier FFS analysis). Brandon's treelists I used for 2001, 2003, and 2009 already excluded plots which were in the buffer zone. According to the papers for 2005 and 2012, anything included in Roller's or Moghaddas' tables is limted to the "10-ha core area" within each unit.
+
+Looking at a map of group selections (by date) and plot locations, potential places where groups went in since 2009 are:
+
+```{r}
+unique(PLOTS.ffs.only_complete[PLOTS.ffs.only_complete$Unit=='0190','PlotID']) # none of these are in groups
+
+unique(PLOTS.ffs.only_complete[PLOTS.ffs.only_complete$Unit=='0180','PlotID']) # 2016 group went in over plot 6, but looking at the measurements its clear that they took place before the harvest. We will have to drop this plot in the future, but for now its ok.
+
+unique(PLOTS.ffs.only_complete[PLOTS.ffs.only_complete$Unit=='0040','PlotID']) # none of these are in groups
+
+unique(PLOTS.ffs.only_complete[PLOTS.ffs.only_complete$Unit=='0340','PlotID']) # none of these are in groups
+
+
+```
+
+Group selections and buffer zones are already dropped.
+
+####Calculate C pools in fuels
+
+According to the 2012 FFS/Carbon paper (Stephens et al. 2012, "Fuel treatment impacts on estimated wildfire carbon loss from forests in Montana, Oregon, California, and Arizona"),
+
+*"Fuels were converted to C biomass assuming a C concentration of 50% for coarse and fine woody fuels (Penman et al. 2003) and 37% for litter and duff (Smith and Heath 2002)."*
+
+
+
+
+```{r}
+# C biomass of fuels
+
+PLOTS.ffs.only_complete['C_litter_tonha'] = PLOTS.ffs.only_complete$fuelload_litter_tonha*0.37
+PLOTS.ffs.only_complete['C_duff_tonha'] = PLOTS.ffs.only_complete$fuelload_duff_tonha*0.37
+PLOTS.ffs.only_complete['C_litterduff_tonha'] = PLOTS.ffs.only_complete$fuelload_litterduff_tonha*0.37
+
+PLOTS.ffs.only_complete['C_1h_tonha'] = PLOTS.ffs.only_complete$fuelload_1h_tonha*0.5
+PLOTS.ffs.only_complete['C_10h_tonha'] = PLOTS.ffs.only_complete$fuelload_10h_tonha*0.5
+PLOTS.ffs.only_complete['C_100h_tonha'] = PLOTS.ffs.only_complete$fuelload_100h_tonha*0.5
+PLOTS.ffs.only_complete['C_1000h_tonha'] = PLOTS.ffs.only_complete$fuelload_1000h_tonha*0.5
+PLOTS.ffs.only_complete['C_1.100h_tonha'] = PLOTS.ffs.only_complete$fuelload_1.100h_tonha*0.5
+PLOTS.ffs.only_complete['C_1.1000h_tonha'] = PLOTS.ffs.only_complete$fuelload_1.1000h_tonha*0.5
+
+PLOTS.ffs.only_complete['C_surface_tonha'] = PLOTS.ffs.only_complete$C_1.1000h_tonha+PLOTS.ffs.only_complete$C_litter_tonha
+
+
+PLOTS.ffs.only_complete['C_total_tonha'] = PLOTS.ffs.only_complete$C_1.1000h_tonha+
+                                            PLOTS.ffs.only_complete$C_litter_tonha+
+                                            PLOTS.ffs.only_complete$C_duff_tonha
+
+# C biomass of fuels
+
+PLOTS.ffs.only_complete_postburns['C_litter_tonha'] = PLOTS.ffs.only_complete_postburns$fuelload_litter_tonha*0.37
+PLOTS.ffs.only_complete_postburns['C_duff_tonha'] = PLOTS.ffs.only_complete_postburns$fuelload_duff_tonha*0.37
+PLOTS.ffs.only_complete_postburns['C_litterduff_tonha'] = PLOTS.ffs.only_complete_postburns$fuelload_litterduff_tonha*0.37
+
+PLOTS.ffs.only_complete_postburns['C_1h_tonha'] = PLOTS.ffs.only_complete_postburns$fuelload_1h_tonha*0.5
+PLOTS.ffs.only_complete_postburns['C_10h_tonha'] = PLOTS.ffs.only_complete_postburns$fuelload_10h_tonha*0.5
+PLOTS.ffs.only_complete_postburns['C_100h_tonha'] = PLOTS.ffs.only_complete_postburns$fuelload_100h_tonha*0.5
+PLOTS.ffs.only_complete_postburns['C_1000h_tonha'] = PLOTS.ffs.only_complete_postburns$fuelload_1000h_tonha*0.5
+PLOTS.ffs.only_complete_postburns['C_1.100h_tonha'] = PLOTS.ffs.only_complete_postburns$fuelload_1.100h_tonha*0.5
+PLOTS.ffs.only_complete_postburns['C_1.1000h_tonha'] = PLOTS.ffs.only_complete_postburns$fuelload_1.1000h_tonha*0.5
+
+PLOTS.ffs.only_complete_postburns['C_surface_tonha'] = PLOTS.ffs.only_complete_postburns$C_1.1000h_tonha+PLOTS.ffs.only_complete_postburns$C_litter_tonha
+
+
+PLOTS.ffs.only_complete_postburns['C_total_tonha'] = PLOTS.ffs.only_complete_postburns$C_1.1000h_tonha+
+                                            PLOTS.ffs.only_complete_postburns$C_litter_tonha+
+                                            PLOTS.ffs.only_complete_postburns$C_duff_tonha
+
+# C biomass of fuels
+
+TRTS.ffs.only_complete['C_litter_tonha'] = TRTS.ffs.only_complete$fuelload_litter_tonha*0.37
+TRTS.ffs.only_complete['C_duff_tonha'] = TRTS.ffs.only_complete$fuelload_duff_tonha*0.37
+TRTS.ffs.only_complete['C_litterduff_tonha'] = TRTS.ffs.only_complete$fuelload_litterduff_tonha*0.37
+
+TRTS.ffs.only_complete['C_1h_tonha'] = TRTS.ffs.only_complete$fuelload_1h_tonha*0.5
+TRTS.ffs.only_complete['C_10h_tonha'] = TRTS.ffs.only_complete$fuelload_10h_tonha*0.5
+TRTS.ffs.only_complete['C_100h_tonha'] = TRTS.ffs.only_complete$fuelload_100h_tonha*0.5
+TRTS.ffs.only_complete['C_1000h_tonha'] = TRTS.ffs.only_complete$fuelload_1000h_tonha*0.5
+TRTS.ffs.only_complete['C_1.100h_tonha'] = TRTS.ffs.only_complete$fuelload_1.100h_tonha*0.5
+TRTS.ffs.only_complete['C_1.1000h_tonha'] = TRTS.ffs.only_complete$fuelload_1.1000h_tonha*0.5
+
+TRTS.ffs.only_complete['C_surface_tonha'] = TRTS.ffs.only_complete$C_1.1000h_tonha+TRTS.ffs.only_complete$C_litter_tonha
+
+
+TRTS.ffs.only_complete['C_total_tonha'] = TRTS.ffs.only_complete$C_1.1000h_tonha+
+                                            TRTS.ffs.only_complete$C_litter_tonha+
+                                            TRTS.ffs.only_complete$C_duff_tonha
+
+# C biomass of fuels
+
+TRTS.ffs.only_complete_postburns['C_litter_tonha'] = TRTS.ffs.only_complete_postburns$fuelload_litter_tonha*0.37
+TRTS.ffs.only_complete_postburns['C_duff_tonha'] = TRTS.ffs.only_complete_postburns$fuelload_duff_tonha*0.37
+TRTS.ffs.only_complete_postburns['C_litterduff_tonha'] = TRTS.ffs.only_complete_postburns$fuelload_litterduff_tonha*0.37
+
+TRTS.ffs.only_complete_postburns['C_1h_tonha'] = TRTS.ffs.only_complete_postburns$fuelload_1h_tonha*0.5
+TRTS.ffs.only_complete_postburns['C_10h_tonha'] = TRTS.ffs.only_complete_postburns$fuelload_10h_tonha*0.5
+TRTS.ffs.only_complete_postburns['C_100h_tonha'] = TRTS.ffs.only_complete_postburns$fuelload_100h_tonha*0.5
+TRTS.ffs.only_complete_postburns['C_1000h_tonha'] = TRTS.ffs.only_complete_postburns$fuelload_1000h_tonha*0.5
+TRTS.ffs.only_complete_postburns['C_1.100h_tonha'] = TRTS.ffs.only_complete_postburns$fuelload_1.100h_tonha*0.5
+TRTS.ffs.only_complete_postburns['C_1.1000h_tonha'] = TRTS.ffs.only_complete_postburns$fuelload_1.1000h_tonha*0.5
+
+TRTS.ffs.only_complete_postburns['C_surface_tonha'] = TRTS.ffs.only_complete_postburns$C_1.1000h_tonha+TRTS.ffs.only_complete_postburns$C_litter_tonha
+
+
+TRTS.ffs.only_complete_postburns['C_total_tonha'] = TRTS.ffs.only_complete_postburns$C_1.1000h_tonha+
+                                            TRTS.ffs.only_complete_postburns$C_litter_tonha+
+                                            TRTS.ffs.only_complete_postburns$C_duff_tonha
+
+
+```
+
+####Write the filtered plot and transect datasets to output tables
+
+```{r}
+# Filtering to only the regular timesteps (pre, post1, post8, post14)
+write.csv(PLOTS.ffs.only_complete,file="Output_Tables/Fuels_byplot_Plots_ffs_filtered.csv",row.names=FALSE)
+write.csv(TRTS.ffs.only_complete,file="Output_Tables/Fuels_byplot_Transects_ffs_filtered.csv",row.names=FALSE)
+
+# Version filteed to regular timesteps and the postburn measurements (for 60, 340, and 400):
+write.csv(PLOTS.ffs.only_complete_postburns,file="Output_Tables/Fuels_byplot_Plots_ffs_filtered_postburns.csv",row.names=FALSE)
+write.csv(TRTS.ffs.only_complete_postburns,file="Output_Tables/Fuels_byplot_Transects_ffs_filtered_postburns.csv",row.names=FALSE)
+
+```
+
+
+###Aggregate to Unit-level tables
+
+
+
+Optional if I am planning to do by-plot (or by transect) repeated measures.
+
+
+
+
+###Re-run analysis, this time using unit-level overstories (rather than plot level) to generate fuels coefficients
+Optional?
+###Filter treelist for overstory analysis
+
+###Generate other tables, using the filtered plot list
+
+####Carbon calculations
+
+
+
+
+####Understory vegetation
+
+
+
+
+
+
+
+
+
+
+# Supporting Documentation and Notes
+
+##Final_Package File Structure
+
+##Background Information
+
+###Fuel Load Calculations Methodology
+
+
+
+This file includes code and supporting documentation for a method to calculate total fuel loads from Brown's transects for Sierra Nevada tree species. This method was originally developed by Jason Moghaddas and Scott Stephens, and relies on the work of many others (see documentation). The purpose of this document is to implement the method in R for improved usability, repeatability, and clarity. The R implementation of this project was developed by Danny Foster in 2017.
+
+
+This method for calculating fuel loads from Brown's transects (hereafter, the "method") was originally described in Stephens (2001). Specifically:
+
+"Surface and ground fuel loads were calculated by using appropriate equations developed for Sierra Nevada forests (van Wagtendonk et al. 1996, 1998). Coefficients required to calculate all surface and ground fuel loads were arithmetically weighted by the basal area fraction (percentage of total basal area by species) to produce accurate estimates of fuel loads (Jan van Wagtendonk, personal communication, 1999)." 
+
+Since then, the method has been used repeatedly in other publications, particularly those related to the Fire-Fire-Surrogate study at Blodgett Forest Reserach Station. *See, for example, Stephens and Moghaddas (2005) and Stephens et al. (2012).* At some point, Jason Moghaddas constructed an excel workbook (with included macros) to facilitate use of the method for new datasets. 
+
+The current effort (2017) uses Moghaddas' implementation (and various publications for reference) to implement the method in R. The goal of this effort is to make the method more accessible, transparent, and reproducible for use in future research.
+
+##Theoretical Background and References
+
+This method requires Brown's transect data and plot (or stand) level overstory data. Brown (1974) describes the widely used fuels transect sampling protocol and provides equations used to calculate fuel loads for woody debris from the transect samples. 
+
+The general idea is to refine the fuel load estimates by using overstory data to improve the accuracy of coefficents used in Brown's equations to calculate fuel loads from transect data. Specifically, QMD, SEC, and SG are coefficients which vary by the species that is the fuel source, and so better estimates can (presumably) be derived by using species-weighted-average values for QMD, SEC, and SG rather than using Brown's given values, which are generalized for entire regions. 
+
+**Note:** This implementation of the method assumes the user is working in the Sierra Nevada. Any species not included in the Van Wagtendonk et al. tables below is assigned their "All Species" value by default. Also, per the usage of Moghaddas' spreadsheet for previous studies, I have elected to include both live and dead trees in the basal-area calculations for the purposes of calculating fuel loads.
+
+This method breaks forest fuels into three main categories, each of which has a particular implementation for calculating the fuel load represented by transect samples.
+
+###Litter and Duff
+
+Litter and duff are measured as depths as specific points along a sampling transect. Van Wagtendonk (1998) developed regressions for litter, Duff, and combined-litter-and-duff loading (kg/$m^2$) as a function of depth (cm) for 19 different Sierra Nevada conifer species. 
+
+```{r}
+
+
+litterduff_coeffs
+
+```
+
+The fuel load represented by a depth measurement under a mixed-species overstory can be estimated using the equation
+
+$$F_{d,plot} = d * C_{plot}$$
+
+where
+
+$F_{d,plot}$ is the fuel load (in kg/$m^2$)
+
+$d$ is the depth of litter, duff, or litter and duff together (in cm) at some point along the transect. If depth was taken at multiple points along the transect, average them together to calculate *d*.
+
+$C_{plot}$ is the best estimate coefficient for the linear relationship between depth and fuel load for a fuel bed generated by the overstory present at *plot*
+
+We can calculate $C_{plot}$ by averaging together the different species-specific coefficients for each tree species contributing fuel to the plot, weighted by their local prevalence. Specifically, we weight each species' coefficient by the proportion of total basal area contributed by that species:
+
+$$C_{plot} = \sum_{spp}{[(\frac{BA_{spp}}{BA_{total}})*C_{spp}]}$$
+Where $C_{spp}$ is the species-specific coefficient for species *spp*, $C_{plot}$ is the best estimate multiple-species coefficient we will use to estimate the fuel load for transects taken in the plot. $BA_{spp}$ and $BA_{total}$ are the basal area occupied by species *spp* and the total overstory basal area (respectively) in the plot. $\frac{BA_{spp}}{BA_{total}}$ is proportion of the plot's basal area occupied by species *spp*. 
+
+This esimate of the fuel load represented by the transect can be averaged with other transects at the same plot (which will have the same value for $C_{plot}$, but different values for *d*) to generate plot-level estimates of fuel load, which can themselves be averaged to generate unit-level estimates of fuel load, depending on the user's statistical approach.
+
+###Fine Woody Debris: 1-hour, 10-hour, and 100-hour fuels
+
+Calculating fuel loads represented by transect counts of 1-hour, 10-hour, and 100-hour fuels is more complicated, but follows the same principle as described for litter and duff above. The different timelag classes (which correspond to size classes of 0.0-0.64cm, 0.64-2.54cm, and 2.54-7.62cm, respectively) must be calculated separately but in a common manner.
+
+Van Wagtendonk et al. (1996) give the equation (modified from Brown 1974):
+
+$$W = \frac{const*QMD*SEC*SLP*SG*n}{length}$$
+Where 
+
+$W$ is the estimated weight (in tons/acre, kg/ha, etc.) of fine woody debris size class *f* on the plot 
+
+$const$ is a constant composed of various unit conversion factors (e.g., to get to tons/acre in the end), described by some authers as *k*
+
+$QMD$ is the quadratic mean diameter of the fuels recorded in the transect
+
+$SEC$ is the correction for the nonhorizontal angle of the fuels
+
+$SLP$ is the slope correction factor, which allows corrected for the effect of a non-horizontal transect on the horizontal distance sampled
+
+$SG$ is the specific gravity of the fuels in the transect
+
+$n$ is the number of intercepts in the transect,
+
+and $length$ is the length of the transect. 
+
+Procedures for calculating these values are described below. QMD, SEC, and SG all vary by timelag classification, and so W is generally calculated individually for each timelag (1h, 10h, and 100h). 
+
+
+**Const (k-values)**
+
+Equation constant *k* ("const" in van Wagtendonk 1996 and Brown 1974) for sampled units and output units. These values for *k* are from van Wagner (1982), and these are used by forest service per Woodall and Williams (2008). The values given here are also in agreement with the Moghaddas spreadsheet.
+```{r}
+
+kvals
+```
+
+
+
+*QMD, SEC, and SG* vary by species and timelag classification of the fuel being totaled. Values for specific species/timelag for fine woody fuels are drawn from van Wagtendonk (1996): 
+
+**QMD**
+
+```{r}
+
+QMDcm
+```
+
+These constants are used in combination with overstory data to create an aggregate estimate of QMD, an average of the various species' QMD estimates (from Van Wagtendonk et al.) weighted by the proportion of stand basal area occupied by each species. See the following formula:
+
+$$QMD_{plot,timelag} = \sum_{species=spp}{PropBA_{spp,plot}*QMD_{spp,timelag}}$$
+Where $QMD_{plot}$ it the estimated quadratic mean diameter of fuels in the *timelag* class in the *plot* across all species
+
+$PropBA_{spp,plot}$ is the proportion of total basal area in *plot* occupied by the species *spp*, calculated from the measurement data
+
+$QMD_{spp,timelag}$ is the QMD of fuels in the *timelag* class for species *spp*, as estimated by Van Wagtendonk et al. 1996.
+
+**SEC**
+
+```{r}
+
+SEC
+```
+
+A propotion-BA-weighted average of SEC is generated in the same way as QMD above.
+
+**SG**
+
+Note that van Wagtendonk et al. found that "species was not significant for the 7.62+cm (3+ in) rotten fuels." and that the average specific gravity for rotten fuels was .36, which is here included as a value.
+
+```{r}
+SG
+```
+
+
+A propotion-BA-weighted average of SEC is generated in the same way as QMD above.
+
+**SLP** varies by the plot location and transect azimuth, $SLP = c = \sqrt{1+(\frac{percentslope}{100})^2}$ per Brown 1974. This is a simple adjustment for the influence of slope on transect length.
+
+**length** is the length of the sampling transect, and varies by the sampling protocol (which may vary from year-to-year) and the timelag class.
+
+
+**n** is the number of intersections of the given timeclass in the plane of the transect.
+
+
+###Coarse Woody Debris: 1000-hour fuels
+
+Brown 1974 gives:
+
+$$W_{1000h} = \frac{11.64*\sum{d^2}*s*a*c}{N*l}$$
+
+and notes: "For material 3 inches and larger, square the diameter of each intersected piece and sum the squared values ($\sum{d^2}$) for all pieces in the sampled area. Compute $\sum{d^2}$ separately for sound and rotten categories. To obtain weights or volumes for certain diameter ranges (3 to 9 inches, for examples), compute $\sum{d^2}$ for the specified range."
+
+Note that this equation is just a special case of the equations given above for 1-100 hour fuels. 11.64 is a unit conversion factor (*const* as above), *s* is the specific gravity of the fuel (*SG* as above), *a* is a value for the secant angle (*SEC* as above), and *c* is the slope correction factor (*SLP* as above). The difference is that instead of counted intercepts and an average squared quadratic mean diameter, we have the actual sum of squared diameters from the measurements directly. 
+
+(Note that *N* is the number of transects represented in the calculation, and is assumed to be 1 in this method. *l* is the transect length, as described above.) 
+
+For sound 1000-hour fuels, we can substitute the BA-weighted-average for a specific transect's overstory and re-arrange the equation:
+
+$$W_{1000S} = (\sum{d^2})*(\frac{const*SLP}{length})*\sum_{spp}{(\frac{BA_{spp}}{BA_{total}})*SEC_{spp,1000s})}*(\sum_{spp}{(\frac{BA_{spp}}{BA_{total}})*SG_{spp,1000s}})$$
+
+
+van Wagtendonk 1998 give single QMD, SEC, and SG values for both 1000-hour sound and 1000-hour rotten fuels. 
+
+Users who have diameter measurements for 1000-hour fuels (which is a standard sampling protocol) have actual diameter measurements, don't need the by-species QMD averages from Van Wagtendonk et al. (1996). 
+
+Van Wagtendonk et al. (1996) do not discuss sound vs. rotten 1000-hour fuels, stating only that "The average secant of the acute angle to the horizontal for the 7.62+ cm (3+in) size class for all species was 2.67 (Table 6)." However, actually referring to table six gives very different data, with by-species averages recorded and varying from 1.00 to 1.06, with an average of 1.02. I believe the text is in error (2.67 bears no resemblance to the data given in the table, but it is 7.62 reversed.) 
+
+For SG, "The average specific gravity for rotten fuels was .36." and "species was not significant for the 7.62+ cm (3+ in) rotten fuels." Specific gravities by species for sound 1000-hour fuels are given in Van Wagtendonk et al. (1996), Table 8. 
+
+##Notes on Pre-Processing of Input Tables
+
+This analysis uses data from measurements spanning 15 years of the FFS project. These data had been stored in a variety of locations and formats. Aggregating them together for this analysis was a complicated process. Wherever feasible, cleaning and processing of the source data takes place in R for the sake of transparency and reproducibility. Those steps are described in the "Implementation" section above. However, a certain level of pre-processing (formatting and cleaning the data in excel) was unavoidable. Detailed notes, recorded during the implementation of the preprocessing, are available upon request.
+
+
+
+
