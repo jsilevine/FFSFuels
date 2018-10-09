@@ -32,86 +32,107 @@ source("FFSFuels_DataClean.R")
 
 ```
 
-## Look at distribution of fuel loads:
+## check normality assumptions for fuelload distributions:
 
 ```{r}
 ## plot histograms:
 
 ## Impose PDF on straight and log-transformed data:
 ## function to compute summary stats
-sumstatdf <- function() {
-  sumstat <- data.frame(FuelClass = c("total", "litter", "duff", "litterduff", "1h", "10h", "100h", "1000s", "1000r", "1.100h", "1.1000h", "surface"))
-
+sumstatdf <- function(data = FFS_data) {
+  sumstat <- data.frame(FuelClass = c("total", "litter", "duff", "litterduff", "1h", "10h", "100h",  "1000h", "1.100h", "1.1000h", "surface"))
+  FFS_data1 <- subset(data, TimestepNum != -1)
+  
   meantotal <- mean(FFS_data$fuelload_total_tonha)
   vartotal <- var(FFS_data$fuelload_total_tonha)
   logmeantotal <- mean(FFS_data$logfuelload_total)
   logvartotal <- var(FFS_data$logfuelload_total)
+  deltameantotal <- mean(FFS_data1$fuelchange_total)
+  deltavartotal <- var(FFS_data1$fuelchange_total)
   
   meanlitter <- mean(FFS_data$fuelload_litter_tonha)
   varlitter <- var(FFS_data$fuelload_litter_tonha)
   logmeanlitter <- mean(FFS_data$logfuelload_litter)
   logvarlitter <- var(FFS_data$logfuelload_litter)
+  deltameanlitter <- mean(FFS_data1$fuelchange_litter)
+  deltavarlitter <- var(FFS_data1$fuelchange_litter)
   
   meanduff <- mean(FFS_data$fuelload_duff_tonha)
   varduff <- var(FFS_data$fuelload_duff_tonha)
   logmeanduff <- mean(FFS_data$logfuelload_duff)
   logvarduff <- var(FFS_data$logfuelload_duff)
+  deltameanduff <- mean(FFS_data1$fuelchange_duff)
+  deltavarduff <- var(FFS_data1$fuelchange_duff)
   
   meanlitterduff <- mean(FFS_data$fuelload_litterduff_tonha)
   varlitterduff <- var(FFS_data$fuelload_litterduff_tonha)
   logmeanlitterduff <- mean(FFS_data$logfuelload_litterduff)
   logvarlitterduff <- var(FFS_data$logfuelload_litterduff)
+  deltameanlitterduff <- mean(FFS_data1$fuelchange_litterduff)
+  deltavarlitterduff <- var(FFS_data1$fuelchange_litterduff)
   
   mean1h <- mean(FFS_data$fuelload_1h_tonha)
   var1h <- var(FFS_data$fuelload_1h_tonha)
   logmean1h <- mean(FFS_data$logfuelload_1h)
   logvar1h <- var(FFS_data$logfuelload_1h)
+  deltamean1h <- mean(FFS_data1$fuelchange_1h)
+  deltavar1h <- var(FFS_data1$fuelchange_1h)
   
   mean10h <- mean(FFS_data$fuelload_10h_tonha)
   var10h <- var(FFS_data$fuelload_10h_tonha)
   logmean10h <- mean(FFS_data$logfuelload_10h)
   logvar10h <- var(FFS_data$logfuelload_10h)
+  deltamean10h <- mean(FFS_data1$fuelchange_10h)
+  deltavar10h <- var(FFS_data1$fuelchange_10h)
   
   mean100h <- mean(FFS_data$fuelload_100h_tonha)
   var100h <- var(FFS_data$fuelload_100h_tonha)
   logmean100h <- mean(FFS_data$logfuelload_100h)
   logvar100h <- var(FFS_data$logfuelload_100h)
+  deltamean100h <- mean(FFS_data1$fuelchange_100h)
+  deltavar100h <- var(FFS_data1$fuelchange_100h)
   
-  mean1000s <- mean(FFS_data$fuelload_1000s_tonha)
-  var1000s <- var(FFS_data$fuelload_1000s_tonha)
-  logmean1000s <- mean(FFS_data$logfuelload_1000s)
-  logvar1000s <- var(FFS_data$logfuelload_1000s)
-  
-  mean1000r <- mean(FFS_data$fuelload_1000r_tonha)
-  var1000r <- var(FFS_data$fuelload_1000r_tonha)
-  logmean1000r <- mean(FFS_data$logfuelload_1000r)
-  logvar1000r <- var(FFS_data$logfuelload_1000r)
+  mean1000h <- mean(FFS_data$fuelload_1000h_tonha)
+  var1000h <- var(FFS_data$fuelload_1000h_tonha)
+  logmean1000h <- mean(FFS_data$logfuelload_1000h)
+  logvar1000h <- var(FFS_data$logfuelload_1000h)
+  deltamean1000h <- mean(FFS_data1$fuelchange_1000h)
+  deltavar1000h <- var(FFS_data1$fuelchange_1000h)
   
   mean1.100h <- mean(FFS_data$fuelload_1.100h_tonha)
   var1.100h <- var(FFS_data$fuelload_1.100h_tonha)
   logmean1.100h <- mean(FFS_data$logfuelload_1.100h)
   logvar1.100h <- var(FFS_data$logfuelload_1.100h)
+  deltamean1.100h <- mean(FFS_data1$fuelchange_1.100h)
+  deltavar1.100h <- var(FFS_data1$fuelchange_1.100h)
   
   mean1.1000h <- mean(FFS_data$fuelload_1.1000h_tonha)
   var1.1000h <- var(FFS_data$fuelload_1.1000h_tonha)
   logmean1.1000h <- mean(FFS_data$logfuelload_1.1000h)
   logvar1.1000h <- var(FFS_data$logfuelload_1.1000h)
+  deltamean1.1000h <- mean(FFS_data1$fuelchange_1.1000h)
+  deltavar1.1000h <- var(FFS_data1$fuelchange_1.1000h)
+  
   
   meansurface <- mean(FFS_data$fuelload_surface_tonha)
   varsurface <- var(FFS_data$fuelload_surface_tonha)
   logmeansurface <- mean(FFS_data$logfuelload_surface)
   logvarsurface <- var(FFS_data$logfuelload_surface)
+  deltameansurface <- mean(FFS_data1$fuelchange_surface)
+  deltavarsurface <- var(FFS_data1$fuelchange_surface)
 
-  sumstat$mean <- c(meantotal, meanlitter, meanduff, meanlitterduff, mean1h, mean10h, mean100h, mean1000s, mean1000r, mean1.100h, mean1.1000h, meansurface)
-  sumstat$var <- c(vartotal, varlitter, varduff, varlitterduff, var1h, var10h, var100h, var1000s, var1000r, var1.100h, var1.1000h, varsurface)
-  sumstat$logmean <- c(logmeantotal, logmeanlitter, logmeanduff, logmeanlitterduff, logmean1h, logmean10h, logmean100h, logmean1000s, logmean1000r, logmean1.100h, logmean1.1000h, logmeansurface)
-  sumstat$logvar <- c(logvartotal, logvarlitter, logvarduff, logvarlitterduff, logvar1h, logvar10h, logvar100h, logvar1000s, logvar1000r, logvar1.100h, logvar1.1000h, logvarsurface)
-  return(sumstat)
+  sumstat$mean <- c(meantotal, meanlitter, meanduff, meanlitterduff, mean1h, mean10h, mean100h, mean1000h, mean1.100h, mean1.1000h, meansurface)
+  sumstat$var <- c(vartotal, varlitter, varduff, varlitterduff, var1h, var10h, var100h, var1000h, var1.100h, var1.1000h, varsurface)
+  sumstat$logmean <- c(logmeantotal, logmeanlitter, logmeanduff, logmeanlitterduff, logmean1h, logmean10h, logmean100h, logmean1000h,  logmean1.100h, logmean1.1000h, logmeansurface)
+  sumstat$logvar <- c(logvartotal, logvarlitter, logvarduff, logvarlitterduff, logvar1h, logvar10h, logvar100h, logvar1000h, logvar1.100h, logvar1.1000h, logvarsurface)
+  sumstat$deltamean <- c(deltameantotal, deltameanlitter, deltameanduff, deltameanlitterduff, deltamean1h, deltamean10h, deltamean100h, deltamean1000h, deltamean1.100h, deltamean1.1000h, deltameansurface)
+  sumstat$deltavar <- c(deltavartotal, deltavarlitter, deltavarduff, deltavarlitterduff, deltavar1h, deltavar10h, deltavar100h, deltavar1000h, deltavar1.100h, deltavar1.1000h, deltavarsurface)
+  return(sumstat)                                                         
 }
 ## write function to dataframe
 sumstat <- sumstatdf()
 
-## function to generate plots
+## functions to generate plots
 makereghists <- function(row, stats = sumstat, data = FFS_data) {
     ## create key variable names:
     reg <- paste0("fuelload_", row, "_tonha")
@@ -142,11 +163,72 @@ makeloghists <- function(row, stats = sumstat, data = FFS_data) {
                   ylab("20 * Relative Frequency") 
 }
 
+makedeltahists <- function(row, stats = sumstat, data = subset(FFS_data, TimestepNum != -1)) {
+    ## create key variable names:
+    delta <- paste0("fuelchangeBACI_", row)
+    ## create sequences for delta:
+    seqvaldelta <- seq(min(data[, delta]), max(data[, delta]), length.out = nrow(data))
+    binwid <- (max(data[, delta]) - min(data[, delta]))/25
+    
+    ## create graph:
+    ggplot(data = data, aes(data[,delta])) +
+                  geom_histogram(aes(y = binwid*..density..), fill = "steelblue3", binwidth = binwid) + 
+                  geom_line(aes(x = seqvaldelta, y = binwid*dnorm(x = seqvaldelta, mean = stats[stats$FuelClass == row, "deltamean"], sd = sqrt(stats[stats$FuelClass == row, "deltavar"])))) +
+                  xlab(delta) +
+                  ylab("25 * Relative Frequency") 
+}
+
+makedelta14hists <- function(row, stats = sumstat, data = subset(FFS_data, TimestepNum != -1)) {
+    ## create key variable names:
+    delta <- paste0("fuelchangeBACI14_", row)
+    ## create sequences for delta:
+    seqvaldelta <- seq(min(data[, delta]), max(data[, delta]), length.out = nrow(data))
+    binwid <- (max(data[, delta]) - min(data[, delta]))/25
+    
+    ## create graph:
+    ggplot(data = data, aes(data[,delta])) +
+                  geom_histogram(aes(y = binwid*..density..), fill = "steelblue3", binwidth = binwid) + 
+                  geom_line(aes(x = seqvaldelta, y = binwid*dnorm(x = seqvaldelta, mean = stats[stats$FuelClass == row, "deltamean"], sd = sqrt(stats[stats$FuelClass == row, "deltavar"])))) +
+                  xlab(delta) +
+                  ylab("25 * Relative Frequency") 
+}
+
+makeratehists <- function(row, stats = sumstat, data = subset(FFS_data, TimestepNum != -1)) {
+    ## create key variable names:
+    delta <- paste0("fuelrate_", row)
+    ## create sequences for delta:
+    seqvaldelta <- seq(min(data[, delta]), max(data[, delta]), length.out = nrow(data))
+    binwid <- (max(data[, delta]) - min(data[, delta]))/25
+    
+    ## create graph:
+    ggplot(data = data, aes(data[,delta])) +
+                  geom_histogram(aes(y = binwid*..density..), fill = "steelblue3", binwidth = binwid) + 
+                  geom_line(aes(x = seqvaldelta, y = binwid*dnorm(x = seqvaldelta, mean = stats[stats$FuelClass == row, "deltamean"], sd = sqrt(stats[stats$FuelClass == row, "deltavar"])))) +
+                  xlab(delta) +
+                  ylab("25 * Relative Frequency") 
+}
+
 regplots <- lapply(sumstat$FuelClass, makereghists, data = FFS_data)
 regplots
 
 logplots <- lapply(sumstat$FuelClass, makeloghists, data = FFS_data)
 logplots
+
+deltaplots <- lapply(sumstat$FuelClass, makedeltahists)
+deltaplots
+
+delta14plots <- lapply(sumstat$FuelClass, makedelta14hists)
+delta14plots
+
+rateplots <- lapply(sumstat$FuelClass, makeratehists)
+rateplots
+
+ggplot(FFS_data, aes(BA.mha.sum_Live_.all.)) + 
+  geom_histogram()
+
+## log distributions look much better -> linear model on logs could work
+
+## however, 1000s, 1000r and 100h are all zero-inflated
 
 ## lets check distribution by treatment:
 
@@ -154,16 +236,50 @@ ggplot(data = FFS_data, aes(fuelload_total_tonha)) +
   geom_histogram(fill = "steelblue3", bins = 25) +
   facet_grid(~Treatment)
 
-## check distribution of litter&duff vs fine vs coarse fuels:
 
-ggplot(data = FFS_data, aes(fuelload_total_tonha)) +
-  geom_histogram(fill = "steelblue3", bins = 25) 
+```
+
+## Check for homogeneity of variances:
+
+```{r}
+
+## by treatment
+ggplot(data = FFS_data, aes(x = Treatment, y = fuelchange_total)) +
+  geom_boxplot() 
+
+## by timestep
+ggplot(data = FFS_data, aes(x = Treatment, y = fuelchange_total)) +
+  geom_boxplot() 
+
+## by treatment
+ggplot(data = FFS_data, aes(x = Treatment, y = fuelchange_litterduff)) +
+  geom_boxplot() 
+
+## by timestep
+ggplot(data = FFS_data, aes(x = Treatment, y = fuelchange_litterduff)) +
+  geom_boxplot()
+
+
+
+## by treatment
+ggplot(data = FFS_data, aes(x = Treatment, y = logfuelload_total)) +
+  geom_boxplot() 
+
+## by timestep
+ggplot(data = FFS_data, aes(x = Treatment, y = logfuelload_total)) +
+  geom_boxplot()
+
+## by treatment
+ggplot(data = FFS_data, aes(x = Treatment, y = logfuelload_litterduff)) +
+  geom_boxplot() 
+
+## by timestep
+ggplot(data = FFS_data, aes(x = Treatment, y = logfuelload_litterduff)) +
+  geom_boxplot()
 
 
 ```
 
-
-Appears to follow a Poisson distribution (roughly)
 
 ## Plot development of fuels chronologically
 
@@ -200,6 +316,9 @@ meandiffTrees <- mean(dates_pre1$diffTrees)
 
 #### Difference between measurements roughly 2 years, implying treatment occurs roughly 1 year after pretreatment 
 
+```
+
+```{r}
 ## plot total fuel by timestep
 ggplot(data = FFS_data, aes(x = FFS_data$TimestepNum, y = (FFS_data$fuelload_total_tonha))) +
   geom_jitter(aes(color = Treatment)) +
@@ -225,7 +344,6 @@ stocktime1.100h <- ggplot(data = FFS_data, aes(x = FFS_data$Timestep, y = FFS_da
   labs(x = "Timestep", y = "Litter and Duff (ton/ha")
 ```
 
-
 # Deltas as response variable:
 
 #### graph deltas:
@@ -233,14 +351,6 @@ stocktime1.100h <- ggplot(data = FFS_data, aes(x = FFS_data$Timestep, y = FFS_da
 ###### Histograms
 ```{r}
 FFS_data_complete <- subset(FFS_data, !is.na(FFS_data$fuelchange_total))
-
-## plot overall distribution:
-ggplot(data = FFS_data_complete, aes(fuelchange_total)) +
-  geom_histogram(fill = "steelblue3", bins = 30) 
-
-## plot litterduff distribution:
-ggplot(data = FFS_data_complete, aes(fuelchange_litterduff)) +
-  geom_histogram(fill = "steelblue3", bins = 30) 
 
 ## plot 1.100 distribution:
 ggplot(data = FFS_data_complete, aes(fuelchange_1.100h)) +
@@ -302,7 +412,7 @@ deltatime1.100h <- ggplot(data = FFS_data, aes(x = FFS_data$Timestep, y = FFS_da
 ```
 
 
-#### compare rates to stocks
+#### compare deltas to stocks
 ```{r}
 ### for total fuels
 grid.arrange(deltatimetotal, stocktimetotal, ncol = 1)
@@ -317,28 +427,6 @@ grid.arrange(deltatime1.100h, stocktime1.100h, ncol = 1)
 
 Note that control fine fuels reduce significantly between Post_1 and Post_7
 this doesn't make a lot of ecological sense - perhaps a crew effect? 
-
-
-## Calculate rates of change:
-
-```{r}
-
-```
-
-## graph rates:
-
-```{r}
-FFS_data_complete <- subset(FFS_data, !is.na(FFS_data$fuelrate_total))
-
-
-## remove outliers
-
-FFS_data_complete <- subset(FFS_data_complete, FFS_data_complete$fuelrate_total < 10)
-
-ggplot(data = FFS_data_complete, aes(x = FFS_data_complete$Timestep, y = FFS_data_complete$fuelrate_total)) +
-  geom_boxplot(aes(color = Treatment))
-
-```
 
 
 Examine difference between compartments:
@@ -409,8 +497,18 @@ ggplot(data = FFS_data, aes(x = BA.mha.sum_Live_.all., y = fuelload_total_tonha)
   
 ```
 
+## Exploring processes of zero-inflation
+
+```{r}
+
+## is there correlation between snag BA/counts and 1000h accumulation?
+ggplot(data = FFS_data, aes(x = FFS_data$BA.mha.sum_.all._.all., y = FFS_data$fuelload_1000h)) + 
+  geom_jitter() + 
+  geom_smooth()
+
+## Nothing...
 
 
-
+```
 
 

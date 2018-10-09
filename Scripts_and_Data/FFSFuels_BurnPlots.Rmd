@@ -1,0 +1,537 @@
+---
+title: "FFSFuels_BurnPlots"
+author: "Jacob_Levine"
+date: "9/25/2018"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# FFSFuels Burn Treatment - Fuel Accumulation
+
+#### Load required packages
+```{r}
+library(pscl)
+library(MuMIn)
+library(ggplot2)
+library(reshape2)
+library(gridExtra)
+library(nlme)
+library(lme4)
+```
+
+#### Set up data:
+
+Load in data
+```{r}
+## load in data
+path <- here("/Fuels_byplot_Plots_ffs_filtered_postburns.csv") 
+FFS_data <- read.csv(path, header = TRUE)
+## extract burn plots
+fire_data <- subset(FFS_data, Treatment == "Burn")
+```
+
+
+Calculate consumption for total fuelloads, duff, litter, 1h, 10h, 100h, 1000h.
+```{r}
+## calculate consumption for total fuelloads for now (after burn 1 and burn 2, not sure about burn 3 yet)
+## expressed as a percent
+
+calc_cons <- function(data, fuels) {
+  
+  ## add columns for Unit, PlotID and BurnNumber
+  Unit <- rep(data[data$Timestep == "Pretreatment" | data$Timestep == "Post_7" | data$Timestep == "Post_14", "Unit"], times = length(fuels))
+  PlotID <- rep(data[data$Timestep == "Pretreatment" | data$Timestep == "Post_7" | data$Timestep == "Post_14", "PlotID"])
+  d <- expand.grid(PlotID, fuels)
+  colnames(d) <- c("PlotID", "FuelClass")
+  BurnID <- rep(c(1,2,3), times = nrow(d)/3)
+  
+  df <- data.frame(Unit, d, BurnID)
+  
+  ## calculate consumption for each burnnumber, fuel category, and plot
+    for (j in 1:length(fuels)) {
+      fuel <- paste0("fuelload_", fuels[j], "_tonha")
+      for (k in 1:length(unique(data$PlotID))) {
+         for (i in 1:3) {
+          ## set correct timestep based on BurnNumber
+          if (i == 1) {
+            timestepPre <- "Pretreatment"
+            timestepPost <- "Post_burn1"
+          }
+          else if (i == 2) {
+            timestepPre <- "Post_7"
+            timestepPost <- "Post_burn2"
+          }
+          else if (i == 3) {
+            timestepPre <- "Post_14"
+            timestepPost <- "Post_burn3"
+          }
+          cons <- (-1 * (data[data$PlotID == unique(data$PlotID)[k] &
+                         data$Timestep == timestepPost, fuel] - data[data$PlotID == unique(data$PlotID)[k] &
+                         data$Timestep == timestepPre, fuel]) / data[data$PlotID == unique(data$PlotID)[k] &
+                         data$Timestep == timestepPre, fuel] * 100)
+          consNet <- (-1 * (data[data$PlotID == unique(data$PlotID)[k] &
+                         data$Timestep == timestepPost, fuel] - data[data$PlotID == unique(data$PlotID)[k] &
+                         data$Timestep == timestepPre, fuel]))
+        
+          df[df$PlotID == unique(data$PlotID)[k] &
+             df$BurnID == i &
+             df$FuelClass == fuels[j], "Consumption"] <- cons
+          
+          df[df$PlotID == unique(data$PlotID)[k] &
+             df$BurnID == i &
+             df$FuelClass == fuels[j], "NetConsumption"] <- consNet
+          
+          
+          }
+        }
+      }
+      return(df)
+    }
+
+fuelslist <- c("total", "duff", "litter", "1h", "10h", "100h", "1000h")
+cons_data <- calc_cons(data = fire_data, fuels = fuelslist)
+
+```
+
+## Consumption
+
+Questions to answer:
+
+1) Quantify consumption of fuels
+    -group by total, litter, duff, 1, 10, 100, 1000.
+    -look at difference in consumption from burn 1 to burn 2.
+    -create table and graphs that examine this difference.
+    -Look at consumption in mechburn vs burn plots.
+    -variablity in consumption between plots (spatial heterogeneity?)
+
+2) What drives the difference in consumption between plots.
+    - Model selection (using all types of fuelload as explanatory variables?  Unit as random variable?)
+    - 2 part process:  did the plot burn at all?  If so: how much did it burn.
+
+
+#### Plotting consumption
+```{r}
+  
+
+
+## remove data wherein fuel level increased after fire and NAs
+cons_data1 <- cons_datapiv[cons_datapiv$total > 0 & cons_datapiv$total < 200, ]
+cons_data1 <- cons_data1[complete.cases(cons_data1$total),]
+cons_data <- cons_data[cons_data$Consumption > 0 & cons_data$NetConsumption < 200,]
+cons_data <- cons_data[complete.cases(cons_data$Consumption),]
+
+## plotting change
+ggplot(cons_data, aes(y = Consumption, x = as.factor(FuelClass), fill = as.factor(BurnID))) +
+  geom_boxplot() +
+  guides(fill = guide_legend(title = "Burn Number")) +
+  xlab("Fuel Class") + 
+  ylab("Consumption (% of pre burn)")
+
+
+ggplot(subset(cons_data, cons_data$FuelClass != "total"), aes(y = Consumption, x = as.factor(FuelClass), fill = as.factor(BurnID))) +
+  geom_boxplot() +
+  guides(fill = guide_legend(title = "Burn Number")) +
+  facet_grid(Unit~.) +
+  xlab("Fuel Class") + 
+  ylab("Consumption (% of pre burn)")
+
+
+ggplot(cons_data, aes(y = NetConsumption, x = as.factor(FuelClass), fill = as.factor(BurnID))) +
+  geom_boxplot() +
+  guides(fill = guide_legend(title = "Burn Number")) +
+  xlab("Fuel Class") + 
+  ylab("Consumption (ton/ha)")
+
+
+ggplot(subset(cons_data, cons_data$FuelClass != "total"), aes(y = NetConsumption, x = as.factor(FuelClass), fill = as.factor(BurnID))) +
+  geom_boxplot() +
+  guides(fill = guide_legend(title = "Burn Number")) +
+  facet_grid(Unit~.) +
+  xlab("Fuel Class") + 
+  ylab("Consumption (% of pre burn)")
+
+
+cons_data1$logtotal <- log(cons_data1$total)
+cons_data1$logloadtotal <- log(cons_data1$fuelload_total_tonha)
+
+tt <- ggplot(cons_data1, aes(y = total, x = fuelload_total_tonha)) +
+  geom_point() +
+  geom_smooth() +
+  ylab("Total Consumption")
+
+td <- ggplot(cons_data1, aes(y = duff, x = fuelload_duff_tonha)) +
+  geom_point() +
+  geom_smooth()+
+  ylab("Sudd Consumption")
+
+tl <- ggplot(cons_data1, aes(y = litter, x = fuelload_litter_tonha)) +
+  geom_point() +
+  geom_smooth()+
+  ylab("Litter Consumption")
+
+t1 <- ggplot(cons_data1, aes(y = X1h, x = fuelload_1h_tonha)) +
+  geom_point() +
+  geom_smooth()+
+  ylab("1h Consumption")
+
+t10 <- ggplot(cons_data1, aes(y = X10h, x = fuelload_10h_tonha)) +
+  geom_point() +
+  geom_smooth()+
+  ylab("10h Consumption")
+
+t100 <- ggplot(cons_data1, aes(y = X100h, x = fuelload_100h_tonha)) +
+  geom_point() +
+  geom_smooth()+
+  ylab("100h Consumption")
+
+t1000 <- ggplot(cons_data1, aes(y = X1000h, x = fuelload_1000h_tonha)) +
+  geom_point() +
+  geom_smooth()+
+  ylab("1000h Consumption")
+
+grid.arrange(tt, td, tl, t1, t10, t100, t1000)
+
+```
+
+
+## Model Fitting for Consumption
+
+#### Data Prep
+
+```{r}
+
+## calculate species ratios
+fire_data$SPPRatioPIPO <- fire_data$BA.mha.sum_Live_PIPO/fire_data$BA.mha.sum_Live_.all. 
+fire_data$SPPRatioPILA <- fire_data$BA.mha.sum_Live_PILA/fire_data$BA.mha.sum_Live_.all. 
+fire_data$SPPRatioPSME <- fire_data$BA.mha.sum_Live_PSME/fire_data$BA.mha.sum_Live_.all. 
+fire_data$SPPRatioQUKE <- fire_data$BA.mha.sum_Live_QUKE/fire_data$BA.mha.sum_Live_.all. 
+fire_data$SPPRatioABCO <- fire_data$BA.mha.sum_Live_ABCO/fire_data$BA.mha.sum_Live_.all. 
+fire_data$SPPRatioCADE <- fire_data$BA.mha.sum_Live_CADE/fire_data$BA.mha.sum_Live_.all. 
+fire_data$SPPRatioLIDE <- fire_data$BA.mha.sum_Live_LIDE/fire_data$BA.mha.sum_Live_.all. 
+fire_data$SPPRatioOTHER <- fire_data$BA.mha.sum_Live_OTHER/fire_data$BA.mha.sum_Live_.all. 
+
+## Pivot for Consumption
+cons_datapiv <- dcast(cons_data[1:5], Unit + PlotID + BurnID ~ FuelClass)
+firesub <- subset(fire_data, fire_data$Timestep == "Pretreatment" | fire_data$Timestep == "Post_7" | fire_data$Timestep == "Post_14")
+cons_datapiv <- data.frame(cons_datapiv, firesub[, c("BA.mha.sum_Live_.all.", "BA.mha.sum_Snag_.all.", "SPPRatioPIPO", "SPPRatioPILA", "SPPRatioPSME", "SPPRatioQUKE", "SPPRatioABCO", "SPPRatioCADE", "SPPRatioLIDE", "SPPRatioOTHER", "fuelload_total_tonha", "fuelload_litter_tonha", "fuelload_duff_tonha", "fuelload_1h_tonha", "fuelload_10h_tonha", "fuelload_100h_tonha", "fuelload_1000h_tonha")])
+
+## pivot for NetConsumption
+cons_datapiv1 <- dcast(cons_data[,c(1:4,6)], Unit + PlotID + BurnID ~ FuelClass)
+firesub <- subset(fire_data, fire_data$Timestep == "Pretreatment" | fire_data$Timestep == "Post_7" | fire_data$Timestep == "Post_14")
+
+## put Netconsumption into cons_datapiv
+cons_datapiv$totalNet <- cons_datapiv1$total
+cons_datapiv$duffNet <- cons_datapiv1$duff
+cons_datapiv$litterNet <- cons_datapiv1$litter
+cons_datapiv$X1hNet <- cons_datapiv1$X1h
+cons_datapiv$X10hNet <- cons_datapiv1$X10h
+cons_datapiv$X100hNet <- cons_datapiv1$X100h
+cons_datapiv$X1000hNet <- cons_datapiv1$X1000h
+
+cons_datapiv$logfuelload_total <- log(cons_datapiv$fuelload_total_tonha)
+
+## rename for ease.
+Cdata <- cons_datapiv
+
+```
+
+#### For just Burn 1:
+
+```{r}
+CdataB1 <- subset(Cdata, BurnID == "1")
+
+lmeB1 <- lme(data = CdataB1, total ~ BA.mha.sum_Live_.all. + BA.mha.sum_Snag_.all. + SPPRatioABCO + SPPRatioCADE + SPPRatioPILA + SPPRatioPIPO + SPPRatioPSME, random = ~1|Unit)
+
+dredge(lmeB1)
+
+### best fitting model:
+lmeB1_1 <- lme(data = CdataB1, total ~ BA.mha.sum_Live_.all. + SPPRatioABCO + SPPRatioCADE + SPPRatioPILA + SPPRatioPIPO + SPPRatioPSME + logfuelload_total, random = ~1|Unit)
+summary(lmeB1_1)
+anova(lmeB1_1)
+
+```
+
+#### For just Burn 2:
+```{r}
+CdataB2 <- subset(Cdata, BurnID == "2")
+
+lmeB2 <- lme(data = CdataB2, total ~ BA.mha.sum_Live_.all. + BA.mha.sum_Snag_.all. + SPPRatioABCO + SPPRatioCADE + SPPRatioPILA + SPPRatioPIPO + SPPRatioPSME, random = ~1|Unit)
+
+dredge(lmeB2)
+
+### best fitting model:
+lmeB2_1 <- lme(data = CdataB2, total ~ SPPRatioABCO + SPPRatioCADE + SPPRatioPILA + SPPRatioPIPO + SPPRatioPSME + logfuelload_total, random = ~1|Unit)
+summary(lmeB2_1)
+anova(lmeB2_1)
+
+```
+
+#### For just Burn 3:
+
+```{r}
+CdataB3 <- subset(Cdata, BurnID == "3")
+
+lmeB3 <- lme(data = CdataB3, total ~ BA.mha.sum_Live_.all. + BA.mha.sum_Snag_.all. + SPPRatioABCO + SPPRatioCADE + SPPRatioPILA + SPPRatioPIPO + SPPRatioPSME + logfuelload_total, random = ~1|Unit)
+
+dredge(lmeB3)
+
+lmeB3_1 <- lme(data = CdataB3, total ~ BA.mha.sum_Snag_.all. + SPPRatioABCO + SPPRatioCADE  + SPPRatioPILA + SPPRatioPIPO + SPPRatioPSME + logfuelload_total, random = ~1|Unit)
+summary(lmeB3_1)
+anova(lmeB3_1)
+```
+
+#### For all Burns together
+
+```{r}
+lmeT <- lme(data = Cdata, total ~ BA.mha.sum_Live_.all. + BA.mha.sum_Snag_.all. + SPPRatioABCO + SPPRatioCADE + SPPRatioPILA + SPPRatioPIPO + SPPRatioPSME + logfuelload_total, random = ~1|Unit)
+
+dredge(lmeT)
+
+lmeBT_1 <- lme(data = Cdata, total ~ SPPRatioABCO + SPPRatioCADE  + SPPRatioPILA + SPPRatioPIPO + SPPRatioPSME + logfuelload_total, random = ~1|Unit)
+summary(lmeBT_1)
+anova(lmeBT_1)
+```
+
+
+
+```{r}
+
+ggplot(Cdata, aes(SPPRatioPILA)) +
+  geom_histogram()
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## What effects fuel accumulation between post_1 and post_7?
+
+#### data preparation
+
+```{r}
+## pull out data:
+fire_data1_7 <- subset(fire_data, fire_data$Timestep == "Post_1" | fire_data$Timestep == "Post_7")
+
+calc_deltas1_7 <- function(data = fire_data1_7) {
+  ## initialize vectors
+  fuelchangeBACI_litter <- numeric()
+  fuelchangeBACI_duff <- numeric()
+  fuelchangeBACI_1000h <- numeric()
+  fuelchangeBACI_1.100h <- numeric()
+  fuelchangeBACI_total <- numeric()
+  
+  ## fill vectors with calculated values
+  for (i in 1:length(unique(data$PlotID))) {
+    for (j in 1:length(unique(data[data$PlotID == unique(data$PlotID)[i], "Timestep"]))) {
+          ## litter
+          NewfuelchangeBACI_litter <- ((data[data$PlotID == unique(data$PlotID)[i] &
+                                              data$Timestep == "Post_7", "fuelload_litter_tonha"] - data[data$PlotID == unique(data$PlotID)[i] &
+                                                                                                                      data$Timestep == "Post_1", "fuelload_litter_tonha"]))
+          fuelchangeBACI_litter <- c(fuelchangeBACI_litter, NewfuelchangeBACI_litter)
+          
+          ## duff
+          NewfuelchangeBACI_duff <- ((data[data$PlotID == unique(data$PlotID)[i] &
+                                            data$Timestep == "Post_7", "fuelload_duff_tonha"] - data[data$PlotID == unique(data$PlotID)[i] &
+                                                                                                                  data$Timestep == "Post_1", "fuelload_duff_tonha"]))
+          fuelchangeBACI_duff <- c(fuelchangeBACI_duff, NewfuelchangeBACI_duff)
+          
+          ## 1000h
+          NewfuelchangeBACI_1000h <- ((data[data$PlotID == unique(data$PlotID)[i] &
+                                             data$Timestep == "Post_7", "fuelload_1000h_tonha"] - data[data$PlotID == unique(data$PlotID)[i] &
+                                                                                                                    data$Timestep == "Post_1", "fuelload_1000r_tonha"]))
+          fuelchangeBACI_1000h <- c(fuelchangeBACI_1000h, NewfuelchangeBACI_1000h)
+          
+          ## 1.100h
+          NewfuelchangeBACI_1.100h <- ((data[data$PlotID == unique(data$PlotID)[i] &
+                                              data$Timestep == "Post_7", "fuelload_1.100h_tonha"] - data[data$PlotID == unique(data$PlotID)[i] &
+                                                                                                                      data$Timestep == "Post_1", "fuelload_1.100h_tonha"]))  
+          fuelchangeBACI_1.100h <- c(fuelchangeBACI_1.100h, NewfuelchangeBACI_1.100h)
+          
+          ## total
+          NewfuelchangeBACI_total <- ((data[data$PlotID == unique(data$PlotID)[i] &
+                                             data$Timestep == "Post_7", "fuelload_total_tonha"] - data[data$PlotID == unique(data$PlotID)[i] &
+                                                                                                                    data$Timestep == "Post_1", "fuelload_total_tonha"]))  
+          fuelchangeBACI_total <- c(fuelchangeBACI_total, NewfuelchangeBACI_total)
+          
+    }
+  }
+  ## append new vectors to data:
+  data$fuelchange_litter <- fuelchangeBACI_litter
+  data$fuelchange_duff <- fuelchangeBACI_duff
+  data$fuelchange_1000h <- fuelchangeBACI_1000h
+  data$fuelchange_1.100h <- fuelchangeBACI_1.100h
+  data$fuelchange_total <- fuelchangeBACI_total
+  return(data)
+}
+fire_data1_7 <- calc_deltas1_7()
+
+ggplot(subset(fire_data1_7, fire_data1_7$Timestep == "Post_1"), aes(fuelchange_total)) +
+  geom_histogram(bins = 20)
+
+fire_data1_7$SPPRatioPIPO <- fire_data1_7$BA.mha.sum_Live_PIPO/fire_data1_7$BA.mha.sum_Live_.all. 
+fire_data1_7$SPPRatioPILA <- fire_data1_7$BA.mha.sum_Live_PILA/fire_data1_7$BA.mha.sum_Live_.all. 
+fire_data1_7$SPPRatioPSME <- fire_data1_7$BA.mha.sum_Live_PSME/fire_data1_7$BA.mha.sum_Live_.all. 
+fire_data1_7$SPPRatioQUKE <- fire_data1_7$BA.mha.sum_Live_QUKE/fire_data1_7$BA.mha.sum_Live_.all. 
+fire_data1_7$SPPRatioABCO <- fire_data1_7$BA.mha.sum_Live_ABCO/fire_data1_7$BA.mha.sum_Live_.all. 
+fire_data1_7$SPPRatioCADE <- fire_data1_7$BA.mha.sum_Live_CADE/fire_data1_7$BA.mha.sum_Live_.all. 
+fire_data1_7$SPPRatioLIDE <- fire_data1_7$BA.mha.sum_Live_LIDE/fire_data1_7$BA.mha.sum_Live_.all. 
+fire_data1_7$SPPRatioOTHER <- fire_data1_7$BA.mha.sum_Live_OTHER/fire_data1_7$BA.mha.sum_Live_.all. 
+
+## calculate mean density by block:
+blockmeans <- aggregate(x = fire_data1_7$BA.mha.sum_Live_.all., by = list(fire_data1_7$Unit), FUN = mean)
+
+plotmeans <- aggregate(x = fire_data1_7$BA.mha.sum_Live_.all., by = list(fire_data1_7$Unit, fire_data1_7$PlotID), FUN = mean)
+
+## append block means to fire_data1_7_14:
+fire_data1_7$blockmean <- numeric(length = nrow(fire_data1_7))
+fire_data1_7$BAdif <- numeric(length = nrow(fire_data1_7))
+for (i in 1:nrow(blockmeans)) {
+  fire_data1_7[fire_data1_7$Unit == blockmeans$Group.1[i], "blockmean"] <- blockmeans$x[i]
+}
+
+## so that BAdif is difference between average BA of plot for all times minus average BA of unit for all times:
+for (i in 1:nrow(plotmeans)) {
+  fire_data1_7[fire_data1_7$Unit == plotmeans$Group.1[i] &
+                fire_data1_7$PlotID == plotmeans$Group.2[i], "BAdif"] <- plotmeans$x[i] - blockmeans[blockmeans$Group.1 == plotmeans$Group.1[i], "x"]
+}
+
+
+
+## calculate mean density by block:
+blockmeansnag <- aggregate(x = fire_data1_7$BA.mha.sum_Snag_.all., by = list(fire_data1_7$Unit), FUN = mean)
+
+
+plotmeansnag <- aggregate(x = fire_data1_7$BA.mha.sum_Snag_.all., by = list(fire_data1_7$Unit, fire_data1_7$PlotID), FUN = mean)
+
+## append block means to fire_data1_7_14:
+fire_data1_7$blockmeanSnag <- numeric(length = nrow(fire_data1_7))
+fire_data1_7$BAdifSnag <- numeric(length = nrow(fire_data1_7))
+for (i in 1:nrow(blockmeansnag)) {
+  fire_data1_7[fire_data1_7$Unit == blockmeansnag$Group.1[i], "blockmeanSnag"] <- blockmeansnag$x[i]
+}
+
+## so that BAdif is difference between average BA of plot for all times minus average BA of unit for all times:
+for (i in 1:nrow(plotmeansnag)) {
+  fire_data1_7[fire_data1_7$Unit == plotmeansnag$Group.1[i] &
+                fire_data1_7$PlotID == plotmeansnag$Group.2[i], "BAdifSnag"] <- plotmeansnag$x[i] - blockmeansnag[blockmeansnag$Group.1 == plotmeans$Group.1[i], "x"]
+}
+
+
+## calculate mean density by block:
+blockmeancons <- aggregate(x = fire_data1_7$ConsumptionBurn1, by = list(fire_data1_7$Unit), FUN = mean)
+
+
+plotmeancons <- aggregate(x = fire_data1_7$ConsumptionBurn1, by = list(fire_data1_7$Unit, fire_data1_7$PlotID), FUN = mean)
+
+## append block means to fire_data1_7_14:
+fire_data1_7$blockmeancons <- numeric(length = nrow(fire_data1_7))
+fire_data1_7$BAdifcons <- numeric(length = nrow(fire_data1_7))
+for (i in 1:nrow(blockmeancons)) {
+  fire_data1_7[fire_data1_7$Unit == blockmeancons$Group.1[i], "blockmeancons"] <- blockmeancons$x[i]
+}
+
+## so that BAdif is difference between average BA of plot for all times minus average BA of unit for all times:
+for (i in 1:nrow(plotmeancons)) {
+  fire_data1_7[fire_data1_7$Unit == plotmeancons$Group.1[i] &
+                fire_data1_7$PlotID == plotmeancons$Group.2[i], "difcons"] <- plotmeancons$x[i] - blockmeancons[blockmeancons$Group.1 == plotmeans$Group.1[i], "x"]
+}
+
+
+
+### Calculate mortality between Pretreatment and Post 7:
+fire_data <- fire_data[complete.cases(fire_data$count.ha_Live_.all.),]
+for (i in 1:length(unique(fire_data1_7$PlotID))) {
+  fire_data1_7[fire_data1_7$PlotID == unique(fire_data1_7$PlotID)[i], "MortalityP_7"] <- fire_data[fire_data$PlotID == unique(fire_data1_7$PlotID)[i] & fire_data$Timestep == "Post_7", "count.ha_Live_.all."] - fire_data[fire_data$PlotID == unique(fire_data1_7$PlotID)[i] & fire_data$Timestep == "Pretreatment", "count.ha_Live_.all."]
+}
+## make mortality positive (i.e. = number of trees that die between pre and post7)
+fire_data1_7$MortalityP_7 <- -1 * fire_data1_7$MortalityP_7
+
+```
+
+
+#### Fit models:
+
+###### Total Fuels
+
+```{r}
+lmedata <- subset(fire_data1_7, fire_data1_7$Timestep == "Post_1")
+
+options(na.action = na.fail)
+lmetotal <- lmer(fuelchange_total ~ BAdif + BAdifSnag + SPPRatioABCO + SPPRatioCADE + SPPRatioOTHER + SPPRatioLIDE + SPPRatioQUKE + SPPRatioPSME + SPPRatioPIPO + difcons + (1|Unit), data = lmedata)
+
+dredge(lmetotal)
+
+lme1 <- lmer(fuelchange_total ~ BAdifSnag + SPPRatioABCO + SPPRatioCADE + SPPRatioPSME + SPPRatioQUKE + SPPRatioPIPO + (1|Unit), data = lmedata)
+
+summary(lme1)
+anova(lme1)
+```
+
+
+```{r}
+
+
+lmetotalcount <- lmer(fuelchange_total ~ MortalityP_7 + count.ha_Live_ABCO + count.ha_Live_CADE + count.ha_Live_OTHER + count.ha_Live_LIDE + count.ha_Live_QUKE + count.ha_Live_PSME + count.ha_Live_PIPO + difcons + (1|Unit), data = lmedata)
+
+dredge(lmetotalcount)
+
+lme2 <- lmer(fuelchange_total ~ BAdifSnag + count.ha_Live_ABCO + count.ha_Live_CADE + count.ha_Live_PSME + count.ha_Live_QUKE + count.ha_Live_PIPO + (1|Unit), data = lmedata)
+
+summary(lme2)
+anova(lme2)
+
+```
+
+```{r}
+
+lmemort <- lmer(fuelchange_total ~ MortalityP_7 +  + (1|Unit), data = lmedata)
+summary(lmemort)
+anova(lmemort)
+```
+
+
+
+
+
+
+```{r}
+
+ggplot(lmedata, aes(MortalityP_7)) +
+  geom_histogram(bins = 10)
+
+
+ggplot(lmedata, aes(y = fuelchange_total, x = MortalityP_7)) +
+  geom_point() + 
+  geom_smooth()
+
+
+```
+
+
+
+
+
+

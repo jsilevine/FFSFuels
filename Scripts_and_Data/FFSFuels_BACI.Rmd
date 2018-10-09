@@ -1,5 +1,5 @@
 ---
-title: "FFSFuels_BACI"
+title: "FFSFuels_modeling"
 author: "Jacob_Levine"
 date: "9/18/2018"
 output: html_document
@@ -11,17 +11,1408 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-# FFS BACI
-
-## Fit Before-After-Control-Impact model for fuels stocks from Fire Fire-Surrogate Study (FFS) 
-
 #### Run data cleaning script:
 ```{r}
 
 source("FFSFuels_DataClean.R")
 
+source("FFSFuels_EDA.Rmd")
+
 ```
 
-## 
+**Jacob 9/25**
+This is very incomplete, switched over to looking at consumption and accumulation in burn plots:
+
+
+
+## what drives differences in rates of fuel accumulation 14 years after initial treatment?
+
+### Prepare data
+
+```{r}
+## subset data
+FFS_data_14 <- subset(FFS_data, TimestepNum == 14)
+
+## calculate mean density (basal area):
+meanBA <- mean(FFS_data_14$BA.mha.sum_Live_.all.)
+
+## calculate mean density by block:
+blockmeans <- aggregate(x = FFS_data$BA.mha.sum_Live_.all., by = list(FFS_data$Unit), FUN = mean)
+
+## calculate difference between blockmeans and overall means
+blockmeans$y <- blockmeans$x - meanBA
+
+plotmeans <- aggregate(x = FFS_data$BA.mha.sum_Live_.all., by = list(FFS_data$Unit, FFS_data$PlotID), FUN = mean)
+
+## append block means to FFS_data_14:
+FFS_data_14$blockmean <- numeric(length = 207)
+FFS_data_14$BAdif <- numeric(length = 207)
+for (i in 1:nrow(blockmeans)) {
+  FFS_data_14[FFS_data_14$Unit == blockmeans$Group.1[i], "blockmean"] <- blockmeans$x[i]
+}
+
+## so that BAdif is difference between average BA of plot for all times minus average BA of unit for all times:
+for (i in 1:nrow(plotmeans)) {
+  FFS_data_14[FFS_data_14$Unit == plotmeans$Group.1[i] &
+                FFS_data_14$PlotID == plotmeans$Group.2[i], "BAdif"] <- plotmeans$x[i] - blockmeans[blockmeans$Group.1 == plotmeans$Group.1[i], "x"]
+}
+
+# for (i in 1:nrow(FFS_data_14)) {
+#   for (j in 1:nrow(blockmeans)) {
+#     if (FFS_data_14$Unit[i] == blockmeans$Group.1[j]) {
+#       FFS_data_14$BAdif[i] <- FFS_data_14$BA.mha.sum_Live_.all.[i] - blockmeans$x[j]
+#     }
+#   }
+# }
+
+## make change the difference between fuelload at 14 and fuelload at 1:
+FFS_data_1 <- subset(FFS_data, TimestepNum == 1)
+
+```
+
+
+### Fitting models
+
+#### Total Fuels:
+
+###### For change in fuelload7:
+```{r}
+## without density as cov
+lme14ctotal <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_total ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14ctotal)
+anova(lme14ctotal)
+
+## with density as cov:
+lme14ctotal.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_total ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14ctotal.BA)
+anova(lme14ctotal.BA)
+
+## with density as cov and interaction:
+lme14ctotal.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_total ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14ctotal.BAint)
+anova(lme14ctotal.BAint)
+
+## compare models:
+AIC(lme14ctotal, lme14ctotal.BA, lme14ctotal.BAint)
+
+```
+
+###### For change in fuelload14:
+```{r}
+## without density as cov
+lme14cctotal <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_total ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14cctotal)
+anova(lme14cctotal)
+
+## with density as cov:
+lme14cctotal.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_total ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14cctotal.BA)
+anova(lme14cctotal.BA)
+
+## with density as cov and interaction:
+lme14cctotal.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_total ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14cctotal.BAint)
+anova(lme14cctotal.BAint)
+
+## compare models:
+AIC(lme14cctotal, lme14cctotal.BA, lme14cctotal.BAint)
+
+```
+
+###### For rate of change:
+```{r}
+## without density as cov
+lme14rtotal <- lme(data = FFS_data_14, 
+               fixed = fuelrate_total ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14rtotal)
+anova(lme14rtotal)
+
+## with density as cov 
+lme14rtotal.BA <- lme(data = FFS_data_14, 
+               fixed = fuelrate_total ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14rtotal.BA)
+anova(lme14rtotal.BA)
+
+## with density as cov with interaction
+lme14rtotal.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelrate_total ~ Treatment*BAdif, 
+               random = ~1|Unit)
+
+summary(lme14rtotal.BAint)
+anova(lme14rtotal.BAint)
+
+## compare models:
+AIC(lme14rtotal, lme14rtotal.BA, lme14rtotal.BAint)
+
+```
+
+###### For stock:
+```{r}
+## without density as cov
+lme14stotal <- lme(data = FFS_data_14, 
+               fixed = logfuelload_total ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14stotal)
+anova(lme14stotal)
+
+## with density as cov with interaction
+lme14stotal.BA <- lme(data = FFS_data_14, 
+               fixed = logfuelload_total ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14stotal.BA)
+anova(lme14stotal.BA)
+
+## with density as cov with interaction
+lme14stotal.BAint <- lme(data = FFS_data_14, 
+               fixed = logfuelload_total ~ Treatment*BAdif, 
+               random = ~1|Unit)
+
+summary(lme14stotal.BAint)
+anova(lme14stotal.BAint)
+
+## compare models
+AIC(lme14stotal, lme14stotal.BA, lme14stotal.BAint)
+
+```
+
+For total fuel loads , best model is purely dependent on treatment.
+
+**For change pre-7** 
+Treatment effects significant for trt only model. Mechburn has greatest reduction, then burn, then mech.  Mech has almost no effect compared to control (p = .98). Note that on average the control experienced a reduction in this period of 11.6 tons/hectare.
+
+**For change pre-14**
+Treatment effects significant for best fitting model (BAint).  Mechburn has greatest reduction, then burn, then mech.  Mechburn and mech are comparable.
+
+**For rates**
+Main effect of mechanical treatment is largest (reduces the rate the most).  Followed by Burn, and then MechBurn.
+
+**For Stocks**
+Main effect of Burn is the largest followed by MechBurn and then Mech.
+
+
+#### For Duff:
+
+###### For change in fuelload:
+```{r}
+## without density as cov
+lme14cduff <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_duff ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14cduff)
+anova(lme14cduff)
+
+## with density as cov
+lme14cduff.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_duff ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14cduff.BA)
+anova(lme14cduff.BA)
+
+## with density as cov
+lme14cduff.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_duff ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14cduff.BAint)
+anova(lme14cduff.BAint)
+
+## compare models:
+AIC(lme14cduff, lme14cduff.BA, lme14cduff.BAint)
+
+```
+
+###### For change in fuelload pre-14:
+```{r}
+## without density as cov
+lme14ccduff <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_duff ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14ccduff)
+anova(lme14ccduff)
+
+## with density as cov
+lme14ccduff.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_duff ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14ccduff.BA)
+anova(lme14ccduff.BA)
+
+## with density as cov
+lme14ccduff.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_duff ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14ccduff.BAint)
+anova(lme14ccduff.BAint)
+
+## compare models:
+AIC(lme14ccduff, lme14cduff.BA, lme14cduff.BAint)
+
+```
+
+
+###### For rate of change:
+```{r}
+## without density as cov
+lme14rduff <- lme(data = FFS_data_14, 
+               fixed = fuelrate_duff ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14rduff)
+anova(lme14rduff)
+
+## with density as cov
+lme14rduff.BA <- lme(data = FFS_data_14, 
+               fixed = fuelrate_duff ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14rduff.BA)
+anova(lme14rduff.BA)
+
+## with density as cov with interactions
+lme14rduff.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelrate_duff ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14rduff.BAint)
+anova(lme14rduff.BAint)
+
+## compare models:
+AIC(lme14rduff, lme14rduff.BA, lme14rduff.BAint)
+
+```
+
+###### For stock:
+```{r}
+## without density as cov
+lme14sduff <- lme(data = FFS_data_14, 
+               fixed = logfuelload_duff ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14sduff)
+anova(lme14sduff)
+
+## with density as cov
+lme14sduff.BA <- lme(data = FFS_data_14, 
+               fixed = logfuelload_duff ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14sduff.BA)
+anova(lme14sduff.BA)
+
+## with density as cov with interactions
+lme14sduff.BAint <- lme(data = FFS_data_14, 
+               fixed = logfuelload_duff ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14sduff.BAint)
+anova(lme14sduff.BAint)
+
+## compare models
+AIC(lme14sduff, lme14sduff.BA, lme14sduff.BAint)
+
+```
+
+**Net Change pre-7**
+Best fitting model is just treatment.
+Treatment effects are significant. Mechburn has most reduction, followed by burn
+
+**Net Change pre-14**
+Best fitting model includes density
+Treatment effects and BA are both significant in terms of main effects.  BA has a negative relationship with duff fuelload.  Burn is strongest, followed by mechburn and then mech (not sig at p=0.05)
+
+**Rate of Change**
+Treatment effects not significant for best fitting model (just trt)
+
+**LogStock**
+Treatment effects significant for best fitting model (just trt). Burn decreases stock the most, then mechburn, then mech.  
+
+```{r}
+
+ggplot(FFS_data_14, aes(x = Treatment, y = logfuelload_duff)) + 
+  geom_boxplot()
+
+ggplot(FFS_data_14, aes(x = Treatment, y = fuelchangeBACI14_duff)) + 
+  geom_boxplot()
+
+ggplot(FFS_data_14, aes(x = BAdif, y = fuelchangeBACI14_duff)) + 
+  geom_point() + 
+  geom_smooth(size = 0.5) 
+
+
+
+
+```
+
+
+#### For Litter:
+
+###### For change in fuelload:
+```{r}
+## without density as cov
+lme14clitter <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_litter ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14clitter)
+anova(lme14clitter)
+
+## with density as cov
+lme14clitter.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_litter ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14clitter.BA)
+anova(lme14clitter.BA)
+
+## with density as cov
+lme14clitter.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_litter ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14clitter.BAint)
+anova(lme14clitter.BAint)
+
+## compare models:
+AIC(lme14clitter, lme14clitter.BA, lme14clitter.BAint)
+
+```
+
+
+###### For change in fuelload pre-14:
+```{r}
+## without density as cov
+lme14cclitter <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_litter ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14cclitter)
+anova(lme14cclitter)
+
+## with density as cov
+lme14cclitter.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_litter ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14cclitter.BA)
+anova(lme14cclitter.BA)
+
+## with density as cov
+lme14cclitter.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_litter ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14cclitter.BAint)
+anova(lme14cclitter.BAint)
+
+## compare models:
+AIC(lme14cclitter, lme14cclitter.BA, lme14cclitter.BAint)
+
+```
+
+###### For rate of change:
+```{r}
+## without density as cov
+lme14rlitter <- lme(data = FFS_data_14, 
+               fixed = fuelrate_litter ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14rlitter)
+anova(lme14rlitter)
+
+## with density as cov
+lme14rlitter.BA <- lme(data = FFS_data_14, 
+               fixed = fuelrate_litter ~ Treatment + BAdif , 
+               random = ~1|Unit)
+
+summary(lme14rlitter.BA)
+anova(lme14rlitter.BA)
+
+## with density as cov and interactions
+lme14rlitter.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelrate_litter ~ Treatment * BAdif , 
+               random = ~1|Unit)
+
+summary(lme14rlitter.BAint)
+anova(lme14rlitter.BAint)
+
+## compare models:
+AIC(lme14rlitter, lme14rlitter.BA, lme14rlitter.BAint)
+
+```
+
+###### For stock:
+```{r}
+## without density as cov
+lme14slitter <- lme(data = FFS_data_14, 
+               fixed = logfuelload_litter ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14slitter)
+anova(lme14slitter)
+
+## with density as cov
+lme14slitter.BA <- lme(data = FFS_data_14, 
+               fixed = logfuelload_litter ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14slitter.BA)
+anova(lme14slitter.BA)
+
+## with density as cov with interactions
+lme14slitter.BAint <- lme(data = FFS_data_14, 
+               fixed = logfuelload_litter ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14slitter.BAint)
+anova(lme14slitter.BAint)
+
+## compare models
+AIC(lme14slitter, lme14slitter.BA, lme14slitter.BAint)
+
+```
+
+**For change pre-7**
+Treatment effects not significant for best fitting model (int only).
+
+**For change pre-14**
+Treatment effects not significant for best fitting model (int only)
+
+**For rate of change**
+Treatment effects are not significant for best fitting model (int only).
+
+**For Stock**
+Treatment effects are not significant for best fitting model (int only).
+
+
+#### For Litterduff:
+
+###### For change in logfuelload:
+```{r}
+## without density as cov
+lme14clitterduff <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_litterduff ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14clitterduff)
+anova(lme14clitterduff)
+
+## with density as cov
+lme14clitterduff.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_litterduff ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14clitterduff.BA)
+anova(lme14clitterduff.BA)
+
+## with density as cov
+lme14clitterduff.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_litterduff ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14clitterduff.BAint)
+anova(lme14clitterduff.BAint)
+
+## compare models:
+AIC(lme14clitterduff, lme14clitterduff.BA, lme14clitterduff.BAint)
+
+```
+
+###### For change in logfuelload pre-14:
+```{r}
+## without density as cov
+lme14cclitterduff <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_litterduff ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14cclitterduff)
+anova(lme14cclitterduff)
+
+## with density as cov
+lme14cclitterduff.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_litterduff ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14cclitterduff.BA)
+anova(lme14cclitterduff.BA)
+
+## with density as cov
+lme14cclitterduff.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_litterduff ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14cclitterduff.BAint)
+anova(lme14cclitterduff.BAint)
+
+## compare models:
+AIC(lme14cclitterduff, lme14cclitterduff.BA, lme14cclitterduff.BAint)
+
+```
+
+###### For rate of change:
+```{r}
+## without density as cov
+lme14rlitterduff <- lme(data = FFS_data_14, 
+               fixed = fuelrate_litterduff ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14rlitterduff)
+anova(lme14rlitterduff)
+
+## with density as cov
+lme14rlitterduff.BA <- lme(data = FFS_data_14, 
+               fixed = fuelrate_litterduff ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+## with density as cov and interactions
+lme14rlitterduff.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelrate_litterduff ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14rlitterduff.BAint)
+anova(lme14rlitterduff.BAint)
+
+## compare models:
+AIC(lme14rlitterduff, lme14rlitterduff.BA, lme14rlitterduff.BAint)
+
+```
+
+###### For Logstock:
+```{r}
+## without density as cov
+lme14slitterduff <- lme(data = FFS_data_14, 
+               fixed = logfuelload_litterduff~ Treatment, 
+               random = ~1|Unit)
+summary(lme14slitterduff)
+anova(lme14slitterduff)
+
+## with density as cov
+lme14slitterduff.BA <- lme(data = FFS_data_14, 
+               fixed = logfuelload_litterduff ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14slitterduff.BA)
+anova(lme14slitterduff.BA)
+
+## with density as cov
+lme14slitterduff.BAint <- lme(data = FFS_data_14, 
+               fixed = logfuelload_litterduff ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14slitterduff.BAint)
+anova(lme14slitterduff.BAint)
+
+## compare models
+AIC(lme14slitterduff, lme14slitterduff.BA, lme14slitterduff.BAint)
+
+```
+
+**For Stock pre-7**
+Treatment effects are significant for best model (trt only).  Mechburn > Burn > Mech (not significant).
+
+**For Stock pre-14**
+Treatment effects and density significant for best model (BAint).  Mechburn > Burn > Mech (not significant).  Again, BA has a negative relationship with fuelload (however this could be difficult to interpret given interactions).  Interactions are not significant.
+
+**For Rate** 
+Treatment effects not significant.
+
+**For stock**
+Treatment effects are significant, Burn reduces the most, followed by mechburn and then mech.
+
+
+
+
+#### For 1h:
+
+###### For change in logfuelload:
+```{r}
+## without density as cov
+lme14c1h <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_1h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14c1h)
+anova(lme14c1h)
+
+## with density as cov
+lme14c1h.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_1h ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14c1h.BA)
+anova(lme14c1h.BA)
+
+## with density as cov with interaction
+lme14c1h.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_1h ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14c1h.BAint)
+anova(lme14c1h.BAint)
+
+## compare models:
+AIC(lme14c1h, lme14c1h.BA, lme14c1h.BAint)
+
+```
+
+###### For change in logfuelload:
+```{r}
+## without density as cov
+lme14cc1h <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_1h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14cc1h)
+anova(lme14cc1h)
+
+## with density as cov
+lme14cc1h.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_1h ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14cc1h.BA)
+anova(lme14cc1h.BA)
+
+## with density as cov with interaction
+lme14cc1h.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI14_1h ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14cc1h.BAint)
+anova(lme14cc1h.BAint)
+
+## compare models:
+AIC(lme14cc1h, lme14cc1h.BA, lme14cc1h.BAint)
+
+```
+
+###### For change in logfuelload:
+```{r}
+## without density as cov
+lme14c1h <- lme(data = FFS_data_14, 
+               fixed = fuelchange_1h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14c1h)
+anova(lme14c1h)
+
+## with density as cov
+lme14c1h.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchange_1h ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14c1h.BA)
+anova(lme14c1h.BA)
+
+## with density as cov with interaction
+lme14c1h.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelchange_1h ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14c1h.BAint)
+anova(lme14c1h.BAint)
+
+## compare models:
+AIC(lme14c1h, lme14c1h.BA, lme14c1h.BAint)
+
+```
+
+
+###### For rate of change:
+```{r}
+## without density as cov
+lme14r1h <- lme(data = FFS_data_14, 
+               fixed = fuelrate_1h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14r1h)
+anova(lme14r1h)
+
+## with density as cov
+lme14r1h.BA <- lme(data = FFS_data_14, 
+               fixed = fuelrate_1h ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14r1h.BA)
+anova(lme14r1h.BA)
+
+## with density as cov
+lme14r1h.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelrate_1h ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14r1h.BAint)
+anova(lme14r1h.BAint)
+
+## compare models:
+AIC(lme14r1h, lme14r1h.BA, lme14r1h.BAint)
+
+```
+
+###### For stock:
+
+Issue of zero inflation comes up here 
+```{r}
+## without density as cov
+lme14s1h <- lme(data = FFS_data_14, 
+               fixed = logfuelload_1h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14s1h)
+anova(lme14s1h)
+
+## with density as cov
+lme14s1h.BA <- lme(data = FFS_data_14, 
+               fixed = logfuelload_1h ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14s1h.BA)
+anova(lme14s1h.BA)
+
+## with density as cov with interactions
+lme14s1h.BAint <- lme(data = FFS_data_14, 
+               fixed = logfuelload_1h ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14s1h.BAint)
+anova(lme14s1h.BAint)
+
+## compare models
+AIC(lme14s1h, lme14s1h.BA, lme14s1h.BAint)
+
+```
+
+**For change**
+Treatment effects not significant.
+
+**For change pre-14**
+
+**For rate of change**
+Treatment effects not significant.
+
+**For stock**
+Treatment effects not significant at 0.05 level, but clost (p = 0.066), interesting that in this case mech has strongest effect on stock, followed by mechburn and then mech
+
+
+#### For 10h:
+
+###### For change in logfuelload:
+```{r}
+## without density as cov
+lme14c10h <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_10h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14c10h)
+anova(lme14c10h)
+
+## with density as cov
+lme14c10h.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_10h ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14c10h.BA)
+anova(lme14c10h.BA)
+
+## with density as cov
+lme14c10h.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelchangeBACI_10h ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14c10h.BAint)
+anova(lme14c10h.BAint)
+
+## compare models:
+AIC(lme14c10h, lme14c10h.BA, lme14c10h.BAint)
+
+```
+
+###### For rate of change:
+```{r}
+## without density as cov
+lme14r10h <- lme(data = FFS_data_14, 
+               fixed = fuelrate_10h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14r10h)
+anova(lme14r10h)
+
+## with density as cov
+lme14r10h.BA <- lme(data = FFS_data_14, 
+               fixed = fuelrate_10h ~ Treatment + BAdif + Treatment*BAdif, 
+               random = ~1|Unit)
+
+summary(lme14r10h.BA)
+anova(lme14r10h.BA)
+
+## compare models:
+AIC(lme14r10h, lme14r10h.BA)
+
+```
+
+###### For stock:
+```{r}
+## without density as cov
+lme14s10h <- lme(data = FFS_data_14, 
+               fixed = logfuelload_10h_tonha ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14s10h)
+anova(lme14s10h)
+
+## with density as cov
+lme14s10h.BA <- lme(data = FFS_data_14, 
+               fixed = logfuelload_10h_tonha ~ Treatment + BAdif + Treatment*BAdif, 
+               random = ~1|Unit)
+
+summary(lme14s10h.BA)
+anova(lme14s10h.BA)
+
+## compare models
+AIC(lme14s10h, lme14s10h.BA)
+
+```
+**For change pre-7**
+Treatment effects not significant.
+**For change pre-14**
+Treatment effects not significant.
+**For rate of change**
+
+#### For 100h:
+
+###### For change in logfuelload:
+```{r}
+## without density as cov
+lme14c100h <- lme(data = FFS_data_14, 
+               fixed = fuelchange_100h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14c100h)
+anova(lme14c100h)
+
+## with density as cov
+lme14c100h.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchange_100h ~ Treatment + BAdif + Treatment*BAdif, 
+               random = ~1|Unit)
+
+summary(lme14c100h.BA)
+anova(lme14c100h.BA)
+
+## compare models:
+AIC(lme14c100h, lme14c100h.BA)
+
+```
+
+###### For rate of change:
+```{r}
+## without density as cov
+lme14r100h <- lme(data = FFS_data_14, 
+               fixed = fuelrate_100h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14r100h)
+anova(lme14r100h)
+
+## with density as cov
+lme14r100h.BA <- lme(data = FFS_data_14, 
+               fixed = fuelrate_100h ~ Treatment + BAdif + Treatment*BAdif, 
+               random = ~1|Unit)
+
+summary(lme14r100h.BA)
+anova(lme14r100h.BA)
+
+## compare models:
+AIC(lme14r100h, lme14r100h.BA)
+
+```
+
+###### For stock:
+
+Deal with zero-inflation by using a ZIP/ZINB model:
+```{r}
+library(pscl)
+
+f1 <- formula(logfuelload_100h_tonha ~ Treatment)
+zilm100h <- zeroinfl(f1, data = FFS_data_14, dist= "negbin")
+
+
+## without density as cov
+lme14s100h <- lme(data = FFS_data_14, 
+               fixed = logfuelload_100h_tonha ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14s100h)
+anova(lme14s100h)
+
+lm14s100h <- lm(data = FFS_data_14, 
+               logfuelload_100h_tonha ~ Treatment)
+summary(lm14s100h)
+anova(lm14s100h)
+
+
+## with density as cov
+lme14s100h.BA <- lme(data = FFS_data_14, 
+               fixed = logfuelload_100h_tonha ~ Treatment + BAdif + Treatment*BAdif, 
+               random = ~1|Unit)
+
+summary(lme14s100h.BA)
+anova(lme14s100h.BA)
+
+## compare models
+AIC(lme14s100h, lme14s100h.BA)
+
+```
+
+
+#### For 1000h:
+
+###### For change in logfuelload:
+```{r}
+## without density as cov
+lme14c1000h <- lme(data = FFS_data_14, 
+               fixed = fuelchange_1000h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14c1000h)
+anova(lme14c1000h)
+
+## with density as cov
+lme14c1000h.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchange_1000h ~ Treatment + BAdif + Treatment*BAdif, 
+               random = ~1|Unit)
+
+summary(lme14c1000h.BA)
+anova(lme14c1000h.BA)
+
+## compare models:
+AIC(lme14c1000h, lme14c1000h.BA)
+
+```
+
+###### For rate of change:
+```{r}
+## without density as cov
+lme14r1000h <- lme(data = FFS_data_14, 
+               fixed = fuelrate_1000h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14r1000h)
+anova(lme14r1000h)
+
+## with density as cov
+lme14r1000h.BA <- lme(data = FFS_data_14, 
+               fixed = fuelrate_1000h ~ Treatment + BAdif + Treatment*BAdif, 
+               random = ~1|Unit)
+
+summary(lme14r1000h.BA)
+anova(lme14r1000h.BA)
+
+## compare models:
+AIC(lme14r1000h, lme14r1000h.BA)
+
+```
+
+###### For stock:
+
+Dealing with zero-inflation - fit a two-step hurdle model
+```{r}
+## First step: is there at least one 1000hr present:
+## 1) create binomial variable for detection/non-detection
+FFS_data_14$bin1000h <- rep(NA, times = nrow(FFS_data_14))
+for (i in 1:nrow(FFS_data_14)) {
+  if (FFS_data_14$logfuelload_1000h_tonha[i] == 0) {
+    FFS_data_14$bin1000h[i] <- 0
+  }
+  else if (FFS_data_14$logfuelload_1000h_tonha[i] > 0) {
+    FFS_data_14$bin1000h[i] <- 1
+  }
+}
+## compare mixed effects to fixed effects model
+lme14s1000hpresM <- glmer(formula = bin1000h ~ 1|Unit, data = FFS_data_14, family = binomial)
+summary(lme14s1000hpresM)
+
+lme14s1000hpresF <- glm(formula = bin1000h ~ 1, data = FFS_data_14, family = binomial)
+summary(lme14s1000hpresF)
+## fixed effects model minimizes AIC
+
+## 2) remove 0s and fit lme model: 
+for (i in 1:nrow(FFS_data_14)) {
+  if (FFS_data_14$logfuelload_1000h_tonha[i] == 0) {
+    FFS_data_14$logfuelload_1000h_tonha[i] <- NA
+  }
+}
+
+FFS_data_14_sub <- FFS_data_14[complete.cases(FFS_data_14$logfuelload_1000h_tonha),]
+
+## without density as cov
+lme14s1000h <- lme(data = FFS_data_14_sub, 
+               fixed = logfuelload_1000h_tonha ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14s1000h)
+anova(lme14s1000h)
+
+## with density as cov
+lme14s1000h.BA <- lme(data = FFS_data_14_sub, 
+               fixed = logfuelload_1000h_tonha ~ Treatment + BAdif + Treatment*BAdif, 
+               random = ~1|Unit)
+
+summary(lme14s1000h.BA)
+anova(lme14s1000h.BA)
+
+## compare models
+AIC(lme14s1000h, lme14s1000h.BA)
+
+```
+
+
+#### For 1.100h:
+
+###### For change in logfuelload:
+```{r}
+## without density as cov
+lme14c1.100h <- lme(data = FFS_data_14, 
+               fixed = fuelchange_1.100h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14c1.100h)
+anova(lme14c1.100h)
+
+## with density as cov
+lme14c1.100h.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchange_1.100h ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14c1.100h.BA)
+anova(lme14c1.100h.BA)
+
+## with density as cov
+lme14c1.100h.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelchange_1.100h ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14c1.100h.BAint)
+anova(lme14c1.100h.BAint)
+
+## compare models:
+AIC(lme14c1.100h, lme14c1.100h.BA, lme14c1.100h.BAint)
+
+```
+
+###### For rate of change:
+```{r}
+## without density as cov
+lme14r1.100h <- lme(data = FFS_data_14, 
+               fixed = fuelrate_1.100h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14r1.100h)
+anova(lme14r1.100h)
+
+## with density as cov
+lme14r1.100h.BA <- lme(data = FFS_data_14, 
+               fixed = fuelrate_1.100h ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14r1.100h.BA)
+anova(lme14r1.100h.BA)
+
+## with density as cov
+lme14r1.100h.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelrate_1.100h ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14r1.100h.BAint)
+anova(lme14r1.100h.BAint)
+
+## compare models:
+AIC(lme14r1.100h, lme14r1.100h.BA, lme14r1.100h.BAint)
+
+```
+
+###### For log of stock:
+```{r}
+## without density as cov
+lme14s1.100h <- lme(data = FFS_data_14, 
+               fixed = logfuelload_1.100h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14s1.100h)
+anova(lme14s1.100h)
+
+## with density as cov
+lme14s1.100h.BA <- lme(data = FFS_data_14, 
+               fixed = logfuelload_1.100h ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14s1.100h.BA)
+anova(lme14s1.100h.BA)
+
+## with density as cov
+lme14s1.100h.BAint <- lme(data = FFS_data_14, 
+               fixed = logfuelload_1.100h ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14s1.100h.BAint)
+anova(lme14s1.100h.BAint)
+
+## compare models
+AIC(lme14s1.100h, lme14s1.100h.BA, lme14s1.100h.BAint)
+
+```
+**For change**
+Treatment effects not significant.
+
+**For rate of change**
+Treatment effects not significant.
+
+**For log of stock**
+Treatment effects not significant.
+
+
+#### For 1.1000h:
+
+###### For change in logfuelload:
+```{r}
+## without density as cov
+lme14c1.1000h <- lme(data = FFS_data_14, 
+               fixed = fuelchange_1.1000h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14c1.1000h)
+anova(lme14c1.1000h)
+
+## with density as cov
+lme14c1.1000h.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchange_1.1000h ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14c1.1000h.BA)
+anova(lme14c1.1000h.BA)
+
+## with density as cov with interactions
+lme14c1.1000h.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelchange_1.1000h ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14c1.1000h.BAint)
+anova(lme14c1.1000h.BAint)
+
+## compare models:
+AIC(lme14c1.1000h, lme14c1.1000h.BA, lme14c1.1000h.BAint)
+
+```
+
+###### For rate of change:
+```{r}
+## without density as cov
+lme14r1.1000h <- lme(data = FFS_data_14, 
+               fixed = fuelrate_1.1000h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14r1.1000h)
+anova(lme14r1.1000h)
+
+## with density as cov
+lme14r1.1000h.BA <- lme(data = FFS_data_14, 
+               fixed = fuelrate_1.1000h ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14r1.1000h.BA)
+anova(lme14r1.1000h.BA)
+
+## with density as cov
+lme14r1.1000h.BAint <- lme(data = FFS_data_14, 
+               fixed = fuelrate_1.1000h ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14r1.1000h.BAint)
+anova(lme14r1.1000h.BAint)
+
+## compare models:
+AIC(lme14r1.1000h, lme14r1.1000h.BA, lme14r1.1000h.BAint)
+
+```
+
+###### For stock:
+```{r}
+## without density as cov
+lme14s1.1000h <- lme(data = FFS_data_14, 
+               fixed = logfuelload_1.1000h ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14s1.1000h)
+anova(lme14s1.1000h)
+
+## with density as cov
+lme14s1.1000h.BA <- lme(data = FFS_data_14, 
+               fixed = logfuelload_1.1000h ~ Treatment + BAdif, 
+               random = ~1|Unit)
+
+summary(lme14s1.1000h.BA)
+anova(lme14s1.1000h.BA)
+
+## with density as cov
+lme14s1.1000h.BAint <- lme(data = FFS_data_14, 
+               fixed = logfuelload_1.1000h ~ Treatment * BAdif, 
+               random = ~1|Unit)
+
+summary(lme14s1.1000h.BAint)
+anova(lme14s1.1000h.BAint)
+
+## compare models
+AIC(lme14s1.1000h, lme14s1.1000h.BA, lme14s1.1000h.BAint)
+
+```
+Treatment effects not significant for any of the cases.
+
+
+#### For surface:
+
+###### For change in logfuelload:
+```{r}
+## without density as cov
+lme14csurface <- lme(data = FFS_data_14, 
+               fixed = fuelchange_surface ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14csurface)
+anova(lme14csurface)
+
+## with density as cov
+lme14csurface.BA <- lme(data = FFS_data_14, 
+               fixed = fuelchange_surface ~ Treatment + BAdif + Treatment*BAdif, 
+               random = ~1|Unit)
+
+summary(lme14csurface.BA)
+anova(lme14csurface.BA)
+
+## compare models:
+AIC(lme14csurface, lme14csurface.BA)
+
+```
+
+###### For rate of change:
+```{r}
+## without density as cov
+lme14rsurface <- lme(data = FFS_data_14, 
+               fixed = fuelrate_surface ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14rsurface)
+anova(lme14rsurface)
+
+## with density as cov
+lme14rsurface.BA <- lme(data = FFS_data_14, 
+               fixed = fuelrate_surface ~ Treatment + BAdif + Treatment*BAdif, 
+               random = ~1|Unit)
+
+summary(lme14rsurface.BA)
+anova(lme14rsurface.BA)
+
+## compare models:
+AIC(lme14rsurface, lme14rsurface.BA)
+
+```
+
+###### For stock:
+```{r}
+## without density as cov
+lme14ssurface <- lme(data = FFS_data_14, 
+               fixed = logfuelload_surface_tonha ~ Treatment, 
+               random = ~1|Unit)
+summary(lme14ssurface)
+anova(lme14ssurface)
+
+## with density as cov
+lme14ssurface.BA <- lme(data = FFS_data_14, 
+               fixed = logfuelload_surface_tonha ~ Treatment + BAdif + Treatment*BAdif, 
+               random = ~1|Unit)
+
+summary(lme14ssurface.BA)
+anova(lme14ssurface.BA)
+
+## compare models
+AIC(lme14ssurface, lme14ssurface.BA)
+
+```
+
+
+
+
+
+
+##**Including Timestep as a determinant**
+
+###### For change in logfuelload:
+
+```{r}
+## for change:
+lmeTctotal <- lme(data = subset(FFS_data, FFS_data$TimestepNum != -1), 
+                fixed = fuelchange_total ~ Treatment + Timestep + Treatment*Timestep, 
+                random = list(~1|Unit, ~1|PlotID))
+
+summary(lmeTctotal)
+anova(lmeTctotal)
+
+```
+
+###### For rate:
+```{r}
+## for change:
+lmeTrtotal <- lme(data = subset(FFS_data, FFS_data$TimestepNum != -1), 
+                fixed = fuelrate_total ~ Treatment + Timestep + Treatment*Timestep, 
+                random = list(~1|Unit, ~1|PlotID))
+
+summary(lmeTrtotal)
+anova(lmeTrtotal)
+
+lmeTrtotalBA <- lme(data = subset(FFS_data, FFS_data$TimestepNum != -1), 
+                fixed = fuelrate_total ~ Treatment + Timestep + BA.mha.sum_Live_.all. + Treatment*Timestep, 
+                random = list(~1|Unit, ~1|PlotID))
+
+summary(lmeTrtotalBA)
+anova(lmeTrtotalBA)
+
+AIC(lmeTrtotal, lmeTrtotalBA)
+```
+
+###### For stock:
+```{r}
+
+lmeTstotal <- lme(data = FFS_data, 
+                fixed = logfuelload_total_tonha ~ Treatment + Timestep + Treatment*Timestep, 
+                random = list(~1|Unit, ~1|PlotID))
+
+summary(lmeTstotal)
+anova(lmeTstotal)
+
+lmeTstotalBA <- lme(data = FFS_data, 
+                fixed = logfuelload_total_tonha ~ Treatment + Timestep + BA.mha.sum_Live_.all. + Treatment*Timestep, 
+                random = list(~1|Unit, ~1|PlotID))
+
+summary(lmeTstotalBA)
+anova(lmeTstotalBA)
+
+AIC(lmeTstotal, lmeTstotalBA)
+
+```
+
+
+```{r}
+## for change:
+lmeTrtotal <- lme(data = subset(FFS_data, FFS_data$TimestepNum == 1 | FFS_data$TimestepNum == 7), 
+                fixed = fuelrate_total ~ Treatment + Timestep + Treatment*Timestep, 
+                random = list(~1|Unit, ~1|PlotID))
+
+summary(lmeTrtotal)
+anova(lmeTrtotal)
+
+lmeTrtotalBA <- lme(data = subset(FFS_data, FFS_data$TimestepNum != -1), 
+                fixed = fuelrate_total ~ Treatment + Timestep + BA.mha.sum_Live_.all. + Treatment*Timestep, 
+                random = list(~1|Unit, ~1|PlotID))
+
+summary(lmeTrtotalBA)
+anova(lmeTrtotalBA)
+
+AIC(lmeTrtotal, lmeTrtotalBA)
+
+
+```
+
+
+
+
 
 
